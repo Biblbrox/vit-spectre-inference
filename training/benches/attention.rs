@@ -8,7 +8,6 @@ use cubecl::benchmark::Benchmark;
 use lightmix::attention::{
     learnedmixer::{LearnedPermuter, LearnedPermuterConfig},
     staticmixer::{PermutationStrategy, StaticMixer, StaticMixerConfig},
-    stochasticmixer::{StochasticMixer, StochasticMixerConfig},
     stochasticwindowmixer::{StochasticWindowMixer, StochasticWindowMixerConfig},
 };
 

@@ -1,6 +1,10 @@
 use std::marker::PhantomData;
 
-use burn::{prelude::Tensor, tensor::backend::Backend};
+use burn::{
+    module::Module,
+    prelude::Tensor,
+    tensor::{Distribution, backend::Backend},
+};
 
 pub mod builder;
 pub mod cloud;
@@ -52,6 +56,42 @@ impl<B: Backend> Pipeline<B> {
     pub fn append(mut self, transforms: Vec<Box<dyn Augmentation<B>>>) -> Self {
         self.transforms.extend(transforms);
         self
+    }
+}
+
+#[derive(Module, Debug)]
+pub struct DropPath<B: Backend> {
+    drop_prob: f64,
+    phantom: PhantomData<B>,
+}
+
+impl<B: Backend> DropPath<B> {
+    pub fn new(drop_prob: f64) -> Self {
+        Self {
+            drop_prob,
+            phantom: PhantomData,
+        }
+    }
+
+    // Applies stochastic depth: randomly drops the residual branch per sample.
+    // x:        the main path (before residual add)
+    // residual: the branch output to stochastically drop
+    pub fn forward(&self, x: Tensor<B, 3>, residual: Tensor<B, 3>) -> Tensor<B, 3> {
+        // During inference or if drop_prob is 0 — passthrough
+        if self.drop_prob == 0.0 || !B::ad_enabled(&x.device()) {
+            return x + residual;
+        }
+
+        let [batch, _, _] = x.dims();
+        let device = x.device();
+        let keep_prob = 1.0 - self.drop_prob;
+
+        // Per-sample binary mask: [B, 1, 1] — whole residual dropped per sample
+        let mask =
+            Tensor::<B, 3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
+                / keep_prob; // rescale so expectation is preserved
+
+        x + residual * mask
     }
 }
 

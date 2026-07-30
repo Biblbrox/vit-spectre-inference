@@ -5,11 +5,14 @@ use burn::{
 
 pub mod cascadedattention;
 pub mod csp_attention;
+pub mod dsthaattention;
 pub mod learnedmixer;
 pub mod self_attention;
 pub mod sinkformer;
 pub mod staticmixer;
 pub mod stochasticmixer;
+pub mod stochasticmixerstatic;
+pub mod stochasticmixerstaticwindow;
 pub mod stochasticwindowmixer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -30,8 +33,54 @@ pub fn sinkhorn<B: Backend, const D: usize>(
         NormalizationMode::Double => {
             sinkhorn_double::<B>(s.into_primitive().tensor(), temp, last, second_last)
         }
-        NormalizationMode::Single => sinkhorn_single::<B>(s.into_primitive().tensor(), temp, last),
+        NormalizationMode::Single => {
+            sinkhorn_single::<B>(s.into_primitive().tensor(), temp, second_last)
+        }
     }))
+}
+
+fn calc_qkv_soft<B: Backend>(
+    temperature: f32,
+    stoch_mode: StochasticSelect,
+    norm_mode: NormalizationMode,
+    q: Tensor<B, 4>,
+    k: Tensor<B, 4>,
+    v: Tensor<B, 4>,
+) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    let (do_q, do_k, do_v) = stoch_mode.flags();
+    let t = temperature;
+
+    let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+        if do_it {
+            sinkhorn(mat, t, norm_mode)
+        } else {
+            mat
+        }
+    };
+
+    (apply(do_q, q), apply(do_k, k), apply(do_v, v))
+}
+
+fn calc_qkv_hard<B: Backend>(
+    x: Tensor<B, 4>,
+    stoch_mode: StochasticSelect,
+    q: Tensor<B, 4>,
+    k: Tensor<B, 4>,
+    v: Tensor<B, 4>,
+) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    let dk = x.dims()[3];
+    let (do_q, do_k, do_v) = stoch_mode.flags();
+
+    // Either select the argmax "hard" index along dk, or apply the matrix as a linear map.
+    let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+        if do_it {
+            x.clone().select(3, mat.argmax(2).reshape([dk]))
+        } else {
+            x.clone().matmul(mat)
+        }
+    };
+
+    (apply(do_q, q), apply(do_k, k), apply(do_v, v))
 }
 
 pub fn sinkhorn_iter<B: Backend, const D: usize>(
@@ -81,6 +130,45 @@ fn sinkhorn_single<B: Backend>(tensor: FloatTensor<B>, temp: f32, last: usize) -
     let exp = B::float_exp(shifted);
     let sum = B::float_sum_dim(exp.clone(), last);
     B::float_div(exp, sum)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum StochasticSelect {
+    Q,
+    K,
+    #[default]
+    Qk,
+    Qkv,
+    None,
+}
+
+impl StochasticSelect {
+    /// (apply to q, apply to k, apply to v)
+    fn flags(self) -> (bool, bool, bool) {
+        match self {
+            StochasticSelect::Q => (true, false, false),
+            StochasticSelect::K => (false, true, false),
+            StochasticSelect::Qk => (true, true, false),
+            StochasticSelect::Qkv => (true, true, true),
+            StochasticSelect::None => (false, false, false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum StochasticMul {
+    Sinkhorn,
+    #[default]
+    Softmax,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum TrainingMode {
+    Soft,
+    Mixed,
+    #[default]
+    Hard,
 }
 
 #[cfg(test)]

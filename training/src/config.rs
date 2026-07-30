@@ -253,26 +253,36 @@ impl ParsedConfig {
         let overrides: HashMap<String, toml::Value> = section
             .get("augmentations")
             .and_then(|v| match v {
-                toml::Value::Table(table) => Some(table.iter().filter_map(|(k, val)| {
-                    if val.is_table() || val.is_array() {
-                        Some((k.clone(), val.clone()))
-                    } else {
-                        None
-                    }
-                }).collect::<HashMap<_, _>>()),
-                toml::Value::Array(arr) => Some(arr.iter().filter_map(|table| {
-                    if let toml::Value::Table(t) = table {
-                        let mut map = HashMap::new();
-                        for (k, v) in t.iter() {
-                            if !v.is_integer() && !v.is_bool() {
-                                map.insert(k.clone(), v.clone());
+                toml::Value::Table(table) => Some(
+                    table
+                        .iter()
+                        .filter_map(|(k, val)| {
+                            if val.is_table() || val.is_array() {
+                                Some((k.clone(), val.clone()))
+                            } else {
+                                None
                             }
-                        }
-                        Some(map)
-                    } else {
-                        None
-                    }
-                }).flatten().collect()),
+                        })
+                        .collect::<HashMap<_, _>>(),
+                ),
+                toml::Value::Array(arr) => Some(
+                    arr.iter()
+                        .filter_map(|table| {
+                            if let toml::Value::Table(t) = table {
+                                let mut map = HashMap::new();
+                                for (k, v) in t.iter() {
+                                    if !v.is_integer() && !v.is_bool() {
+                                        map.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                Some(map)
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten()
+                        .collect(),
+                ),
                 _ => None,
             })
             .unwrap_or_default();

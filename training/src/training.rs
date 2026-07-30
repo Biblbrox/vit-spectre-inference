@@ -75,10 +75,10 @@ pub fn build_metrics<B: Backend>() -> MetricsHandler<B> {
         .add(TopKAccuracyMetric::new(5), |o| {
             TopKAccuracyInput::new(o.output(), o.targets())
         })
-        .add(BatchTimeMetric::new(), |_| BatchTimeInput {})
-        .add(ThroughputMetric::new(), |o| ThroughputInput {
-            batch_size: o.output().dims()[0],
-        })
+    //.add(BatchTimeMetric::new(), |_| BatchTimeInput {})
+    //.add(ThroughputMetric::new(), |o| ThroughputInput {
+    //    batch_size: o.output().dims()[0],
+    //})
 }
 
 #[derive(serde::Deserialize)]

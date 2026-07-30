@@ -96,7 +96,8 @@ pub trait Batcher<B: Backend>: Send + Sync {
         let labels = Tensor::<B, 1, Int>::from_ints(labelbuf.as_slice(), device);
         let transformed = transforms.execute(
             Tensor::<B, 4>::from_data(data, device)
-                .swap_dims(1, -1)
+                //.swap_dims(1, -1)
+                .permute([0, 3, 1, 2])
                 .div_scalar(255),
         );
 
@@ -108,42 +109,3 @@ pub trait Batcher<B: Backend>: Send + Sync {
 
     fn batch(&self, df: DataFrame, transforms: Arc<Pipeline<B>>, device: &B::Device) -> Batch<B>;
 }
-
-macro_rules! define_image_batcher {
-    ($name:ident, $width:expr, $height:expr, $channels:expr, $data_col:expr, $label_col:expr) => {
-        pub struct $name;
-
-        impl $name {
-            pub fn new() -> Arc<Self> {
-                Arc::new(Self)
-            }
-        }
-
-        impl<B: Backend> Batcher<B> for $name {
-            fn batch(
-                &self,
-                df: DataFrame,
-                transforms: Arc<Pipeline<B>>,
-                device: &B::Device,
-            ) -> Batch<B> {
-                let b = df.height();
-                self.generic_batch(
-                    df,
-                    transforms,
-                    Shape::new([b, $width, $height, $channels]),
-                    $data_col,
-                    $label_col,
-                    device,
-                )
-            }
-        }
-    };
-}
-
-define_image_batcher!(Cifar10Batcher, 32, 32, 3, "image", "label");
-define_image_batcher!(Cifar100Batcher, 32, 32, 3, "image", "label");
-define_image_batcher!(FashionMnistBatcher, 28, 28, 1, "image", "label");
-define_image_batcher!(Food101Batcher, 96, 96, 3, "image", "label");
-define_image_batcher!(ImageNet1kBatcher, 224, 224, 3, "image", "label");
-define_image_batcher!(MnistBatcher, 28, 28, 1, "image", "label");
-define_image_batcher!(TinyImageNetBatcher, 64, 64, 3, "image", "label");

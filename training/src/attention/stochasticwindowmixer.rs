@@ -4,46 +4,15 @@ use burn::{
     tensor::{Distribution, Int, activation::softmax, backend::Backend},
 };
 
-use crate::attention::{NormalizationMode, sinkhorn};
+use crate::attention::{
+    NormalizationMode, StochasticMul, StochasticSelect, TrainingMode, sinkhorn,
+};
 
 /// Stochastic window attention implementation.
 /// By default, it works as a basic window attention. To apply double-stochastic behaviour,
 /// you need to set StochasticSelect/StochasticMul options.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum StochasticSelect {
-    Q,
-    K,
-    Qk,
-    Qkv,
-    #[default]
-    None,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum StochasticMul {
-    Sinkhorn,
-    #[default]
-    Softmax,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum SelectMethod {
-    #[default]
-    Argmax,
-    Topk,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-pub enum TrainingMode {
-    #[default]
-    Soft,
-    Mixed,
-    Hard,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct StochasticWindowMixerConfig {
+pub struct StochasticAttentionWindowConfig {
     pub embed_dim: usize,
     pub seq_length: usize,
     pub nhead: usize,
@@ -56,14 +25,12 @@ pub struct StochasticWindowMixerConfig {
     #[serde(default)]
     pub norm_mode: NormalizationMode,
     #[serde(default)]
-    pub select_mode: SelectMethod,
-    #[serde(default)]
-    pub mul_mode: StochasticMul,
+    pub score_mode: StochasticMul,
     #[serde(default)]
     pub training_mode: TrainingMode,
 }
 
-impl StochasticWindowMixerConfig {
+impl StochasticAttentionWindowConfig {
     pub fn new(
         embed_dim: usize,
         seq_length: usize,
@@ -77,17 +44,16 @@ impl StochasticWindowMixerConfig {
             nhead,
             kernel_size,
             temperature,
-            stoch_mode: StochasticSelect::default(),
-            norm_mode: NormalizationMode::default(),
-            select_mode: SelectMethod::default(),
-            mul_mode: StochasticMul::default(),
-            training_mode: TrainingMode::default(),
+            stoch_mode: StochasticSelect::Q,
+            norm_mode: NormalizationMode::Single,
+            score_mode: StochasticMul::Softmax,
+            training_mode: TrainingMode::Hard,
         }
     }
 }
 
 #[derive(Module, Debug)]
-pub struct StochasticWindowMixer<B: Backend> {
+pub struct StochasticAttentionWindow<B: Backend> {
     q_mat: Param<Tensor<B, 4>>,
     k_mat: Param<Tensor<B, 4>>,
     v_mat: Param<Tensor<B, 4>>,
@@ -100,13 +66,12 @@ pub struct StochasticWindowMixer<B: Backend> {
     window_indices: Tensor<B, 1, Int>, // [N * bw]
     stoch_mode: StochasticSelect,
     norm_mode: NormalizationMode,
-    select_mode: SelectMethod,
-    mul_mode: StochasticMul,
+    score_mode: StochasticMul,
     train_mode: TrainingMode,
     seq_length: usize,
 }
 
-impl<B: Backend> StochasticWindowMixer<B> {
+impl<B: Backend> StochasticAttentionWindow<B> {
     fn local_window(&self, x: Tensor<B, 4>) -> Tensor<B, 5> {
         let [b, n, h, dk] = x.dims();
         let bw = 2 * self.half_width + 1;
@@ -123,69 +88,42 @@ impl<B: Backend> StochasticWindowMixer<B> {
     }
 
     fn calc_qkv_soft(&self) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+        let (do_q, do_k, do_v) = self.stoch_mode.flags();
         let t = self.temperature;
-        match self.stoch_mode {
-            StochasticSelect::Q => (
-                sinkhorn(self.q_mat.val(), t, self.norm_mode),
-                self.k_mat.val(),
-                self.v_mat.val(),
-            ),
-            StochasticSelect::K => (
-                self.q_mat.val(),
-                sinkhorn(self.k_mat.val(), t, self.norm_mode),
-                self.v_mat.val(),
-            ),
-            StochasticSelect::Qk => (
-                sinkhorn(self.q_mat.val(), t, self.norm_mode),
-                sinkhorn(self.k_mat.val(), t, self.norm_mode),
-                self.v_mat.val(),
-            ),
-            StochasticSelect::Qkv => (
-                sinkhorn(self.q_mat.val(), t, self.norm_mode),
-                sinkhorn(self.k_mat.val(), t, self.norm_mode),
-                sinkhorn(self.v_mat.val(), t, self.norm_mode),
-            ),
-            StochasticSelect::None => (self.q_mat.val(), self.k_mat.val(), self.v_mat.val()),
-        }
+
+        let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+            if do_it {
+                sinkhorn(mat, t, self.norm_mode)
+            } else {
+                mat
+            }
+        };
+
+        (
+            apply(do_q, self.q_mat.val()),
+            apply(do_k, self.k_mat.val()),
+            apply(do_v, self.v_mat.val()),
+        )
     }
 
     fn calc_qkv_hard(&self, x: Tensor<B, 4>) -> (Tensor<B, 5>, Tensor<B, 5>, Tensor<B, 5>) {
         let dk = x.dims()[3];
-        let [q, k, v] = [self.q_mat.val(), self.k_mat.val(), self.v_mat.val()];
+        let (do_q, do_k, do_v) = self.stoch_mode.flags();
 
-        let apply_stochastic = |mat: Tensor<B, 4>| -> Tensor<B, 4> {
-            x.clone().select(3, mat.argmax(2).reshape([dk])) // select along dk dim, no expand needed
+        // Either select the argmax "hard" index along dk, or apply the matrix as a linear map.
+        let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+            if do_it {
+                x.clone().select(3, mat.argmax(2).reshape([dk]))
+            } else {
+                x.clone().matmul(mat)
+            }
         };
 
-        let apply_linear = |mat: Tensor<B, 4>| -> Tensor<B, 4> { x.clone().matmul(mat) };
+        let q = apply(do_q, self.q_mat.val()).unsqueeze_dim(3);
+        let k = self.local_window(apply(do_k, self.k_mat.val()));
+        let v = self.local_window(apply(do_v, self.v_mat.val()));
 
-        match self.stoch_mode {
-            StochasticSelect::Q => (
-                apply_stochastic(q).unsqueeze_dim(3),
-                self.local_window(apply_linear(k)),
-                self.local_window(apply_linear(v)),
-            ),
-            StochasticSelect::K => (
-                apply_linear(q).unsqueeze_dim(3),
-                self.local_window(apply_stochastic(k)),
-                self.local_window(apply_linear(v)),
-            ),
-            StochasticSelect::Qk => (
-                apply_stochastic(q).unsqueeze_dim(3),
-                self.local_window(apply_stochastic(k)),
-                self.local_window(apply_linear(v)),
-            ),
-            StochasticSelect::Qkv => (
-                apply_stochastic(q).unsqueeze_dim(3),
-                self.local_window(apply_stochastic(k)),
-                self.local_window(apply_stochastic(v)),
-            ),
-            StochasticSelect::None => (
-                apply_linear(q).unsqueeze_dim(3),
-                self.local_window(apply_linear(k)),
-                self.local_window(apply_linear(v)),
-            ),
-        }
+        (q, k, v)
     }
 
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
@@ -201,9 +139,10 @@ impl<B: Backend> StochasticWindowMixer<B> {
 
     fn calc_scores(&self, q: Tensor<B, 5>, k_win: Tensor<B, 5>) -> Tensor<B, 5> {
         let scores = q.matmul(k_win) * self.inv_scale + self.band_bias.val();
-        match self.mul_mode {
+        match self.score_mode {
             StochasticMul::Softmax => softmax(scores, 4),
             StochasticMul::Sinkhorn => sinkhorn(scores, self.temperature, self.norm_mode),
+            StochasticMul::None => scores,
         } // [B,N,H,1,bw]
     }
 
@@ -243,8 +182,8 @@ impl<B: Backend> StochasticWindowMixer<B> {
     }
 }
 
-impl StochasticWindowMixerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticWindowMixer<B> {
+impl StochasticAttentionWindowConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticAttentionWindow<B> {
         let w = (self.kernel_size - 1) / 2;
         let window = 2 * w + 1;
         let dk = self.embed_dim / self.nhead; // head dim
@@ -267,7 +206,7 @@ impl StochasticWindowMixerConfig {
             .set_require_grad(true)
         };
 
-        StochasticWindowMixer {
+        StochasticAttentionWindow {
             band_bias: Param::from_tensor(Tensor::<B, 5>::zeros(
                 [1, self.seq_length, self.nhead, 1, window],
                 device,
@@ -285,8 +224,7 @@ impl StochasticWindowMixerConfig {
             stoch_mode: self.stoch_mode,
             seq_length: self.seq_length,
             norm_mode: self.norm_mode,
-            select_mode: self.select_mode,
-            mul_mode: self.mul_mode,
+            score_mode: self.score_mode,
             train_mode: self.training_mode,
         }
     }
