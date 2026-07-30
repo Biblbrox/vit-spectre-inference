@@ -1,54 +1,23 @@
-use std::marker::PhantomData;
-
 use burn::{
     Tensor,
     config::Config,
     module::{Module, Param},
     nn::{Dropout, DropoutConfig, Gelu, Linear, LinearConfig},
-    tensor::{Distribution, Shape, backend::Backend, ops::PadMode},
+    tensor::{Shape, backend::Backend},
 };
 
 use crate::{
-    linear::{LinearLayer, monarch::MonarchLinearConfig},
-    mixing::stochasticwindowmixer::{StochasticWindowMixer, StochasticWindowMixerConfig},
+    attention::{
+        dsthaattention::{DSTHA, DSTHAConfig},
+        stochasticmixer::{StochasticAttention, StochasticAttentionConfig},
+        stochasticmixerstatic::{StochasticAttentionStatic, StochasticAttentionStaticConfig},
+        stochasticmixerstaticwindow::{
+            StochasticAttentionStaticWindow, StochasticAttentionStaticWindowConfig,
+        },
+    },
+    augmentations::DropPath,
     norm::{DynamicERF, DynamicERFConfig},
 };
-
-#[derive(Module, Debug)]
-pub struct DropPath<B: Backend> {
-    drop_prob: f64,
-    phantom: PhantomData<B>,
-}
-
-impl<B: Backend> DropPath<B> {
-    pub fn new(drop_prob: f64) -> Self {
-        Self {
-            drop_prob,
-            phantom: PhantomData,
-        }
-    }
-
-    // Applies stochastic depth: randomly drops the residual branch per sample.
-    // x:        the main path (before residual add)
-    // residual: the branch output to stochastically drop
-    pub fn forward(&self, x: Tensor<B, 3>, residual: Tensor<B, 3>) -> Tensor<B, 3> {
-        // During inference or if drop_prob is 0 — passthrough
-        if self.drop_prob == 0.0 || !B::ad_enabled(&x.device()) {
-            return x + residual;
-        }
-
-        let [batch, _, _] = x.dims();
-        let device = x.device();
-        let keep_prob = 1.0 - self.drop_prob;
-
-        // Per-sample binary mask: [B, 1, 1] — whole residual dropped per sample
-        let mask =
-            Tensor::<B, 3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
-                / keep_prob; // rescale so expectation is preserved
-
-        x + residual * mask
-    }
-}
 
 #[derive(Module, Debug)]
 pub struct TokenMerger<B: Backend> {
@@ -106,9 +75,12 @@ impl<B: Backend> TokenMerger<B> {
 
 #[derive(Module, Debug)]
 pub struct FastEncoderLayer<B: Backend> {
-    linear1: LinearLayer<B>,
-    linear2: LinearLayer<B>,
-    mix_layer: StochasticWindowMixer<B>,
+    linear1: Linear<B>,
+    linear2: Linear<B>,
+    //mix_layer: StochasticWindowMixer<B>,
+    //mix_layer: StochasticAttention<B>,
+    //mix_layer: StochasticAttentionStaticWindow<B>,
+    mix_layer: DSTHA<B>,
     norm1: DynamicERF<B>,
     norm2: DynamicERF<B>,
     dropout: Dropout,
@@ -122,17 +94,11 @@ pub struct FastEncoderLayer<B: Backend> {
 pub struct FastEncoderLayerConfig {
     seq_length: usize,
     embed_dim: usize,
-    num_heads: usize,
     hidden_dim: usize,
     dropout: f64,
     #[config(default = 0.0)]
     drop_path_prob: f64,
-    encoder: usize,
-    sinkhorn_temp: f32,
-    #[config(default = true)]
-    use_monarch: bool,
-    grid_h: usize,
-    grid_w: usize,
+    nhead: usize,
 }
 
 #[derive(Module, Debug)]
@@ -144,13 +110,11 @@ pub struct FastEncoder<B: Backend> {
 #[derive(Config, Debug)]
 pub struct FastEncoderConfig {
     num_layers: usize,
-    grid_size: usize,
     seq_length: usize,
     embed_dim: usize,
-    num_heads: usize,
     hid_dim: usize,
     dropout: f64,
-    sinkhorn_temp: f32,
+    nhead: usize,
 }
 
 impl<B: Backend> FastEncoderLayer<B> {
@@ -164,13 +128,10 @@ impl<B: Backend> FastEncoderLayer<B> {
         let ff_out = self._ff_block(self.norm2.forward(x.clone()));
 
         self.drop_path.forward(x, ff_out)
-        // Merge tokens N -> N/2 before the FFN
-        //self.merger.forward(x)
     }
 
     pub fn _ff_block(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         let hidden = self.linear1.forward(x);
-        //let hidden = hidden.clamp(-1e4, 1e4);
         self.dropout.forward(
             self.linear2
                 .forward(self.dropout.forward(self.activation.forward(hidden))),
@@ -180,25 +141,28 @@ impl<B: Backend> FastEncoderLayer<B> {
 
 impl FastEncoderLayerConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> FastEncoderLayer<B> {
-        let make_linear = |in_f: usize, out_f: usize| -> LinearLayer<B> {
-            if self.use_monarch {
-                LinearLayer::Monarch(MonarchLinearConfig::new(in_f, out_f).init(device))
-            } else {
-                LinearLayer::Dense(LinearConfig::new(in_f, out_f).init(device))
-            }
-        };
-
         FastEncoderLayer {
-            linear1: make_linear(self.embed_dim, self.hidden_dim),
-            linear2: make_linear(self.hidden_dim, self.embed_dim),
-            mix_layer: StochasticWindowMixerConfig::new(
-                self.embed_dim,
-                self.seq_length,
-                self.num_heads,
-                3,
-                self.sinkhorn_temp,
-            )
-            .init(device),
+            linear1: LinearConfig::new(self.embed_dim, self.hidden_dim).init(device),
+            linear2: LinearConfig::new(self.hidden_dim, self.embed_dim).init(device),
+            //mix_layer: StochasticWindowMixerConfig::new(
+            //    self.embed_dim,
+            //    self.seq_length,
+            //    self.nhead,
+            //    3,
+            //    0.05,
+            //)
+            //.init(device),
+            //mix_layer: StochasticAttentionConfig::new(self.embed_dim, self.nhead, 0.05)
+            //    .init(device),
+            //mix_layer: StochasticAttentionStaticWindowConfig::new(
+            //    self.embed_dim,
+            //    self.seq_length,
+            //    self.nhead,
+            //    3,
+            //    0.05,
+            //)
+            //.init(device),
+            mix_layer: DSTHAConfig::new(self.embed_dim, self.nhead).init(device),
             norm1: DynamicERFConfig::new(self.embed_dim).init(device),
             norm2: DynamicERFConfig::new(self.embed_dim).init(device),
             dropout: DropoutConfig::new(self.dropout).init(),
@@ -211,12 +175,6 @@ impl FastEncoderLayerConfig {
 
 impl<B: Backend> FastEncoder<B> {
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
-        let [_, n, _] = x.dims();
-
-        // Pad the sequence to the next power of 2
-        let pad = n.next_power_of_two() - n;
-        let x = x.pad([(0, 0), (0, pad), (0, 0)], PadMode::Constant(0.0));
-
         let mut output = x.clone();
 
         for layer in self.encoder_layers.iter() {
@@ -234,25 +192,17 @@ impl<B: Backend> FastEncoder<B> {
 impl FastEncoderConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> FastEncoder<B> {
         let mut layers = Vec::new();
-        let seq_length = self.seq_length.next_power_of_two();
 
         for i in 0..self.num_layers {
-            //let layer_seq = (seq_length >> i).max(1);
-            let layer_seq = seq_length;
             layers.push(
                 FastEncoderLayerConfig::new(
-                    layer_seq,
+                    self.seq_length,
                     self.embed_dim,
-                    self.num_heads,
                     self.hid_dim,
                     self.dropout,
-                    i,
-                    self.sinkhorn_temp,
-                    self.grid_size,
-                    self.grid_size,
+                    self.nhead,
                 )
-                .with_drop_path_prob(((i + 1) as f64 / self.num_layers as f64) * 0.1)
-                .with_use_monarch(false)
+                //.with_drop_path_prob(((i + 1) as f64 / self.num_layers as f64) * 0.1)
                 .init(device),
             );
         }

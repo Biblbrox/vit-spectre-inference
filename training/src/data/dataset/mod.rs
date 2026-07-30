@@ -1,13 +1,4 @@
-pub mod cifar10;
-pub mod cifar100;
-pub mod coco;
-pub mod fashionmnist;
-pub mod food101;
-pub mod imagenet1k;
-pub mod mnist;
-pub mod modelnet40;
 pub mod registry;
-pub mod tinyimagenet;
 
 use std::str::FromStr;
 

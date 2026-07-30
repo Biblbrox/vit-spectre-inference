@@ -4,6 +4,7 @@ use burn::{
 };
 use cubecl::benchmark::Benchmark;
 
+use lightmix::attention::AttentionConfig;
 use lightmix::models::{
     efficientvit::{EfficientViT, EfficientViTConfig},
     fast_vit::{FastViT, FastViTConfig},
@@ -12,7 +13,9 @@ use lightmix::models::{
 
 use cubecl::{benchmark::BenchmarkComputations, profile::TimingMethod};
 
-use crate::common::{GpuBackend, generate_run_id, print_bench_results};
+use crate::common::{
+    AttentionVariant, GpuBackend, generate_run_id, make_attention_config, print_bench_results,
+};
 mod common;
 
 pub struct FastViTBenchmark<B: Backend> {
@@ -20,13 +23,13 @@ pub struct FastViTBenchmark<B: Backend> {
     pub batch_size: usize,
     pub in_channels: usize,
     pub embed_dim: usize,
-    pub num_heads: usize,
     pub num_layers: usize,
     pub num_classes: usize,
     pub patch_size: usize,
     pub image_size: usize,
     pub hid_dim: usize,
     pub dropout: f64,
+    pub mix_layer: AttentionConfig,
     pub device: B::Device,
 }
 
@@ -48,13 +51,12 @@ impl<B: Backend> Benchmark for FastViTBenchmark<B> {
             ),
             FastViTConfig {
                 embed_dim: self.embed_dim,
-                num_heads: self.num_heads,
                 num_encoders: self.num_layers,
                 patch_size: self.patch_size,
                 hidden_dim: self.hid_dim,
-                sinkhorn_temp: 0.05,
                 activation: "gelu".to_string(),
                 dropout: self.dropout,
+                mix_layer: self.mix_layer.clone(),
             }
             .init(
                 &self.device,
@@ -67,8 +69,8 @@ impl<B: Backend> Benchmark for FastViTBenchmark<B> {
 
     fn name(&self) -> String {
         format!(
-            "FastViT-{:?}x{:?}x{:?} {:?} heads",
-            self.batch_size, self.num_patches, self.embed_dim, self.num_heads
+            "FastViT-{:?}x{:?}x{:?} {:?}",
+            self.batch_size, self.num_patches, self.embed_dim, self.mix_layer
         )
         .to_lowercase()
     }
@@ -237,10 +239,10 @@ fn models_benchmark_backend<B: Backend>(backend: &str) {
     let device = B::Device::default();
 
     let batch_size = 8;
-    let embed_dim = [192, 384, 768];
-    let hid_dim = [768, 1536, 3072];
-    let num_heads = [3, 6, 12];
-    let layers = [12, 12, 12];
+    let embed_dim = 192;
+    let hid_dim = 768;
+    let num_heads = 3;
+    let num_layers = 12;
     let image_size: usize = 224;
     let patch_size: usize = 16;
     let num_patches: usize = (image_size / patch_size).pow(2);
@@ -248,99 +250,76 @@ fn models_benchmark_backend<B: Backend>(backend: &str) {
     let in_channels = 3;
     let dropout = 0.0;
 
-    let mut results_fast: Vec<(u32, BenchmarkComputations)> = Vec::new();
     let mut results_vit: Vec<(u32, BenchmarkComputations)> = Vec::new();
     let mut results_efficientvit: Vec<(u32, BenchmarkComputations)> = Vec::new();
-    for i in 0..num_heads.len() {
+    let mut variant_results: Vec<(&str, Vec<(u32, BenchmarkComputations)>)> = Vec::new();
+
+    for (idx, variant) in AttentionVariant::all_variants().iter().enumerate() {
+        let mix_layer = make_attention_config(*variant, embed_dim, num_heads, num_patches);
+
         let bench_fast = FastViTBenchmark::<B> {
             num_patches,
             batch_size: batch_size,
-            embed_dim: embed_dim[i],
-            num_heads: num_heads[i],
-            num_layers: layers[i],
+            embed_dim,
+            num_layers,
             in_channels,
             num_classes,
             patch_size,
             image_size,
-            hid_dim: hid_dim[i],
+            hid_dim,
             device: device.clone(),
             dropout,
+            mix_layer,
         };
         let bench_res_fast = bench_fast.run(TimingMethod::System).unwrap();
         let computed_fast = BenchmarkComputations::new(&bench_res_fast);
 
-        let bench_vit = ViTBenchmark::<B> {
-            num_patches,
-            batch_size: batch_size,
-            embed_dim: embed_dim[i],
-            num_heads: num_heads[i],
-            num_layers: layers[i],
-            in_channels,
-            num_classes,
-            patch_size,
-            image_size,
-            hid_dim: hid_dim[i],
-            device: device.clone(),
-            dropout,
-        };
-        let bench_res_vit = bench_vit.run(TimingMethod::System).unwrap();
-        let computed_vit = BenchmarkComputations::new(&bench_res_vit);
-
-        let efficientvit_config = match i {
-            0 => make_efficientvit_config(
-                32,
-                [64, 128, 256],
-                [2, 4, 6], // total depth = 12
-                [2, 4, 8],
-                2,
-                4,
-                3,
-                dropout,
-                0.025,
-                [0.9, 0.999],
-            ),
-            1 => make_efficientvit_config(
-                48,
-                [96, 192, 384],
-                [3, 3, 6], // total depth = 12
-                [3, 6, 12],
-                2,
-                4,
-                3,
-                dropout,
-                0.025,
-                [0.9, 0.999],
-            ),
-            _ => make_efficientvit_config(
-                64,
-                [128, 256, 512],
-                [4, 4, 4], // total depth = 12
-                [4, 8, 16],
-                2,
-                4,
-                3,
-                dropout,
-                0.025,
-                [0.9, 0.999],
-            ),
-        };
-
-        let bench_efficientvit = EfficientViTBenchmark::<B> {
-            num_patches,
-            batch_size,
-            in_channels,
-            image_size,
-            num_classes,
-            config: efficientvit_config,
-            device: device.clone(),
-        };
-        let bench_res_efficientvit = bench_efficientvit.run(TimingMethod::System).unwrap();
-        let computed_efficientvit = BenchmarkComputations::new(&bench_res_efficientvit);
-
-        results_efficientvit.push((i as u32, computed_efficientvit));
-        results_fast.push((i as u32, computed_fast));
-        results_vit.push((i as u32, computed_vit));
+        variant_results.push((variant.label(), vec![(idx as u32, computed_fast)]));
     }
+
+    // ViT baseline
+    let bench_vit = ViTBenchmark::<B> {
+        num_patches,
+        batch_size: batch_size,
+        embed_dim,
+        num_heads,
+        num_layers,
+        in_channels,
+        num_classes,
+        patch_size,
+        image_size,
+        hid_dim,
+        device: device.clone(),
+        dropout,
+    };
+    let bench_res_vit = bench_vit.run(TimingMethod::System).unwrap();
+    results_vit.push((0, BenchmarkComputations::new(&bench_res_vit)));
+
+    // EfficientViT baseline
+    let efficientvit_config = make_efficientvit_config(
+        32,
+        [64, 128, 256],
+        [2, 4, 6],
+        [2, 4, 8],
+        2,
+        4,
+        3,
+        dropout,
+        0.025,
+        [0.9, 0.999],
+    );
+
+    let bench_efficientvit = EfficientViTBenchmark::<B> {
+        num_patches,
+        batch_size,
+        in_channels,
+        image_size,
+        num_classes,
+        config: efficientvit_config,
+        device: device.clone(),
+    };
+    let bench_res_efficientvit = bench_efficientvit.run(TimingMethod::System).unwrap();
+    results_efficientvit.push((0, BenchmarkComputations::new(&bench_res_efficientvit)));
 
     let run_id = generate_run_id();
 
@@ -348,17 +327,8 @@ fn models_benchmark_backend<B: Backend>(backend: &str) {
         run_id.as_str(),
         "models",
         backend,
-        &format!("FastViT ({})", backend),
-        "embed_dim",
-        &results_fast,
-    );
-
-    print_bench_results(
-        run_id.as_str(),
-        "models",
-        backend,
         &format!("ViT ({})", backend),
-        "embed_dim",
+        "baseline",
         &results_vit,
     );
 
@@ -367,9 +337,20 @@ fn models_benchmark_backend<B: Backend>(backend: &str) {
         "models",
         backend,
         &format!("EfficientViT ({})", backend),
-        "variant",
+        "baseline",
         &results_efficientvit,
     );
+
+    for (label, results) in variant_results {
+        print_bench_results(
+            run_id.as_str(),
+            "models",
+            backend,
+            &format!("FastViT[{}] ({})", label, backend),
+            "variant",
+            &results,
+        );
+    }
 }
 
 fn main() {

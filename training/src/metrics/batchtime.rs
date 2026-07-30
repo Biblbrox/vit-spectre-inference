@@ -1,5 +1,3 @@
-use std::{sync::Arc, time::Instant};
-
 use burn::{
     tensor::backend::Backend,
     train::{
@@ -10,8 +8,8 @@ use burn::{
         },
     },
 };
+use std::{sync::Arc, time::Instant};
 
-#[derive(Clone)]
 pub struct BatchTimeInput;
 
 impl<B: Backend> Adaptor<BatchTimeInput> for ClassificationOutput<B> {

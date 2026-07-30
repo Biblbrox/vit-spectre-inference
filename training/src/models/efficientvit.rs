@@ -3,17 +3,17 @@ use burn::{
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
     prelude::*,
-    tensor::backend::AutodiffBackend,
+    tensor::{Int, backend::AutodiffBackend, backend::Backend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use serde::Deserialize;
 
 use crate::{
+    attention::cascadedattention::{CascadedGroupAttention, CascadedGroupAttentionConfig},
     conv::{ConvBNAct, ConvBNActConfig, MBConv, MBConvConfig},
     data::batch::Batch,
     embeddings::overlapped::{PatchEmbeddingOverlapped, PatchEmbeddingOverlappedConfig},
-    mixing::cascadedattention::{CascadedGroupAttention, CascadedGroupAttentionConfig},
-    models::ModelConfig,
+    models::{ModelConfig, TrainConfig},
 };
 
 #[derive(Module, Debug)]
@@ -182,6 +182,19 @@ impl<B: Backend> EfficientViT<B> {
 
         self.head.forward(x)
     }
+
+    pub fn forward_classification(
+        &self,
+        images: Tensor<B, 4>,
+        targets: Tensor<B, 1, Int>,
+    ) -> ClassificationOutput<B> {
+        let output = self.forward(images);
+        let loss = CrossEntropyLossConfig::new()
+            .init(&output.device())
+            .forward(output.clone(), targets.clone());
+
+        ClassificationOutput::new(loss, output, targets)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -296,39 +309,12 @@ impl<B: Backend> ModelConfig<B> for EfficientViTConfig {
     type TrainModel = EfficientViT<Autodiff<B>>;
     type ValidModel = EfficientViT<B>;
 
-    fn init_training(
-        &self,
-        device: &B::Device,
-        in_channels: usize,
-        image_size: usize,
-        num_classes: usize,
-    ) -> Self::TrainModel {
-        self.init(device, in_channels, image_size, num_classes)
+    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+        self.init(device, config.in_channels, config.image_size, config.num_classes)
     }
 
-    fn init_inference(
-        &self,
-        device: &B::Device,
-        in_channels: usize,
-        image_size: usize,
-        num_classes: usize,
-    ) -> Self::ValidModel {
-        self.init(device, in_channels, image_size, num_classes)
-    }
-}
-
-impl<B: Backend> EfficientViT<B> {
-    pub fn forward_classification(
-        &self,
-        images: Tensor<B, 4>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
-        let output = self.forward(images);
-        let loss = CrossEntropyLossConfig::new()
-            .init(&output.device())
-            .forward(output.clone(), targets.clone());
-
-        ClassificationOutput::new(loss, output, targets)
+    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+        self.init(device, config.in_channels, config.image_size, config.num_classes)
     }
 }
 

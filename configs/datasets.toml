@@ -42,7 +42,7 @@ std = [0.2675, 0.2565, 0.2761]
 
 [fashionmnist]
 augmentation_pipeline = "image"
-transforms = ["normalize", "random_flip"]
+transforms = ["normalize"]
 batch_size = 64
 val_batch_size = 128
 epochs = 100
@@ -70,7 +70,8 @@ std = [0.229, 0.224, 0.225]
 
 [tinyimagenet]
 augmentation_pipeline = "image"
-transforms = ["normalize", "random_flip"]
+transforms = ["normalize", "random_flip", "random_erasing", "random_grayscale"]
+# transforms = ["normalize"]
 batch_size = 64
 val_batch_size = 128
 epochs = 100
@@ -79,12 +80,26 @@ img_size = 64
 in_channels = 3
 
 [[tinyimagenet.augmentations.normalize]]
+mean = [0.485, 0.456, 0.406]  # Values from imagenet1k
+std = [0.229, 0.224, 0.225]
+
+[imagenette2]
+augmentation_pipeline = "image"
+transforms = ["normalize"]
+batch_size = 64
+val_batch_size = 128
+epochs = 100
+num_classes = 200
+img_size = 320
+in_channels = 3
+
+[[imagenette2.augmentations.normalize]]
 mean = [0.485, 0.456, 0.406]
 std = [0.229, 0.224, 0.225]
 
 [food101]
 augmentation_pipeline = "image"
-transforms = ["normalize", "random_flip"]
+transforms = ["normalize"]
 batch_size = 32
 val_batch_size = 64
 epochs = 100

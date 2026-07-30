@@ -73,6 +73,12 @@ DATASET_SPECS = {
         "unnest": True,
         "decode_fn": make_image_decoder((256, 256), (16, 16, 240, 240), 3),
     },
+    "imagenette2-320": {
+        "labelcol": "label",
+        "datacol": "image",
+        "unnest": True,
+        "decode_fn": make_image_decoder((320, 320), None, 3),
+    },
     "tinyimagenet": {
         "labelcol": "label",
         "datacol": "image",

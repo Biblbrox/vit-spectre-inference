@@ -9,21 +9,21 @@ resolver = "2"
 [dependencies]
 image = "0.25.9"
 ndarray = "0.16"
-#ort-tract = "0.1.0+0.21"
+# ort-tract = "0.1.0+0.21"
 ort = { version = "=2.0.0-rc.10", features = [
-    "ndarray",
-    # "xnnpack",
-    # "acl",
-    # "armnn",
-    # "webgpu",
-    "download-binaries",
-    # "tls-rustls",
-    "fetch-models",
+  "ndarray",
+  # "xnnpack",
+  # "acl",
+  # "armnn",
+  # "webgpu",
+  "download-binaries",
+  # "tls-rustls",
+  "fetch-models",
 ], default-features = false }
-#openssl-sys = { version = "0.9", features = ['vendored'] }
-#openssl = { version = "0.10", features = ["vendored"] }
-#openssl-sys = { version = "0.9.111", features = ["vendored"] }
+# openssl-sys = { version = "0.9", features = ['vendored'] }
+# openssl = { version = "0.10", features = ["vendored"] }
+# openssl-sys = { version = "0.9.111", features = ["vendored"] }
 # raqote = "0.8.5"
 # show-image = { version = "=0.14.0", features = ["image", "raqote"] }
-#show-image = { version = "=0.14.0", features = ["image"] }
+# show-image = { version = "=0.14.0", features = ["image"] }
 # openssl = { version = "0.10", features = ["vendored"] }

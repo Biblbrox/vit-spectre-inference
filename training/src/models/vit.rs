@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::{
     data::batch::Batch,
     embeddings::vit::{PatchEmbedding, PatchEmbeddingConfig},
-    models::ModelConfig,
+    models::{ModelConfig, TrainConfig},
 };
 
 /// Standard ViT implementation with cls token and fixed
@@ -51,6 +51,19 @@ impl<B: Backend> ViT<B> {
         let x = self.encoder.forward(encoder_input);
         let x = self.layer_norm.forward(x);
         self.linear.forward(x.slice(s![.., 0, ..])).squeeze() // [batch_size, num_classes]
+    }
+
+    pub fn forward_classification(
+        &self,
+        images: Tensor<B, 4>,
+        targets: Tensor<B, 1, Int>,
+    ) -> ClassificationOutput<B> {
+        let output = self.forward(images);
+        let loss = CrossEntropyLossConfig::new()
+            .init(&output.device())
+            .forward(output.clone(), targets.clone());
+
+        ClassificationOutput::new(loss, output, targets)
     }
 }
 
@@ -103,39 +116,22 @@ impl<B: Backend> ModelConfig<B> for ViTConfig {
     type TrainModel = ViT<Autodiff<B>>;
     type ValidModel = ViT<B>;
 
-    fn init_training(
-        &self,
-        device: &B::Device,
-        in_channels: usize,
-        image_size: usize,
-        num_classes: usize,
-    ) -> Self::TrainModel {
-        self.init(device, in_channels, image_size, num_classes)
+    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+        self.init(
+            device,
+            config.in_channels,
+            config.image_size,
+            config.num_classes,
+        )
     }
 
-    fn init_inference(
-        &self,
-        device: &B::Device,
-        in_channels: usize,
-        image_size: usize,
-        num_classes: usize,
-    ) -> Self::ValidModel {
-        self.init(device, in_channels, image_size, num_classes)
-    }
-}
-
-impl<B: Backend> ViT<B> {
-    pub fn forward_classification(
-        &self,
-        images: Tensor<B, 4>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
-        let output = self.forward(images);
-        let loss = CrossEntropyLossConfig::new()
-            .init(&output.device())
-            .forward(output.clone(), targets.clone());
-
-        ClassificationOutput::new(loss, output, targets)
+    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+        self.init(
+            device,
+            config.in_channels,
+            config.image_size,
+            config.num_classes,
+        )
     }
 }
 

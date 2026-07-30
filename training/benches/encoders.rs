@@ -13,17 +13,13 @@ use crate::common::{CpuBackend, GpuBackend, generate_run_id, print_bench_results
 mod common;
 
 pub struct FastEncoderBenchmark<B: Backend> {
-    pub num_patches: usize,
+    pub seq_length: usize,
     pub batch_size: usize,
-    pub in_channels: usize,
     pub embed_dim: usize,
-    pub num_heads: usize,
     pub num_layers: usize,
-    pub num_classes: usize,
-    pub patch_size: usize,
-    pub image_size: usize,
     pub hid_dim: usize,
     pub dropout: f64,
+    pub nhead: usize,
     pub device: B::Device,
 }
 
@@ -32,23 +28,19 @@ impl<B: Backend> Benchmark for FastEncoderBenchmark<B> {
     type Output = Tensor<B, 3>;
 
     fn prepare(&self) -> Self::Input {
-        let grid_size = self.image_size / self.patch_size;
-        let num_patches = grid_size.pow(2);
         (
             Tensor::<B, 3>::random(
-                [self.batch_size, self.num_patches, self.embed_dim],
+                [self.batch_size, self.seq_length, self.embed_dim],
                 Distribution::Default,
                 &self.device,
             ),
             FastEncoderConfig::new(
                 self.num_layers,
-                grid_size,
-                num_patches,
+                self.seq_length,
                 self.embed_dim,
-                self.num_heads,
                 self.hid_dim,
                 self.dropout,
-                0.05,
+                self.nhead,
             )
             .init(&self.device),
         )
@@ -56,8 +48,8 @@ impl<B: Backend> Benchmark for FastEncoderBenchmark<B> {
 
     fn name(&self) -> String {
         format!(
-            "FastEncoder-{:?}x{:?}x{:?} {:?} heads",
-            self.batch_size, self.num_patches, self.embed_dim, self.num_heads
+            "FastEncoder-{:?}x{:?}x{:?} {:?}",
+            self.batch_size, self.seq_length, self.embed_dim, self.nhead
         )
         .to_lowercase()
     }
@@ -130,72 +122,70 @@ impl<B: Backend> Benchmark for ViTEncoderBenchmark<B> {
 fn encoders_benchmark_backend<B: Backend>(run_id: &str, backend: &str) {
     let device = B::Device::default();
 
-    let batches = [8; 5];
-    let embed_dim = [64, 128, 256, 512, 1024];
-    let num_heads = [1, 2, 4, 8, 16];
-    let _out_channels = [64, 128, 256, 512, 1024];
-    let image_size: usize = 224;
-    let patch_size: usize = 16;
-    let num_patches: usize = (image_size / patch_size).pow(2);
-    let num_classes = 1000;
+    let batch_size = 8;
+    let embed_dim = 64;
+    let seq_length = 196;
+    let num_heads = 4;
     let num_layers = 12;
     let hid_dim = 768;
-    let in_channels = 3;
     let dropout = 0.5;
 
-    let mut results_fast: Vec<(u32, BenchmarkComputations)> = Vec::new();
     let mut results_vit: Vec<(u32, BenchmarkComputations)> = Vec::new();
-    for head in num_heads.into_iter() {
-        let bench_fast = FastEncoderBenchmark::<B> {
-            num_patches,
-            batch_size: batches[0],
-            embed_dim: embed_dim[0],
-            num_heads: head,
-            num_layers,
-            in_channels,
-            num_classes,
-            patch_size,
-            image_size,
-            hid_dim,
-            device: device.clone(),
-            dropout,
-        };
+    let mut variant_results: Vec<(&str, Vec<(u32, BenchmarkComputations)>)> = Vec::new();
 
-        let bench_vit = ViTEncoderBenchmark::<B> {
-            num_patches,
-            batch_size: batches[0],
-            embed_dim: embed_dim[0],
-            num_heads: head,
+    for (idx, variant) in AttentionVariant::all_variants().iter().enumerate() {
+        let mix_layer = make_attention_config(*variant, embed_dim, num_heads, seq_length);
+
+        let bench_fast = FastEncoderBenchmark::<B> {
+            seq_length,
+            batch_size,
+            embed_dim,
             num_layers,
             hid_dim,
+            nhead: num_heads,
             device: device.clone(),
             dropout,
         };
 
         let bench_res_fast = bench_fast.run(TimingMethod::System).unwrap();
-        let bench_res_vit = bench_vit.run(TimingMethod::System).unwrap();
         let computed_fast = BenchmarkComputations::new(&bench_res_fast);
-        let computed_vit = BenchmarkComputations::new(&bench_res_vit);
-        results_fast.push((head as u32, computed_fast));
-        results_vit.push((head as u32, computed_vit));
+
+        variant_results.push((variant.label(), vec![(idx as u32, computed_fast)]));
     }
+
+    // ViT baseline
+    let bench_vit = ViTEncoderBenchmark::<B> {
+        num_patches: seq_length,
+        batch_size,
+        embed_dim,
+        num_heads,
+        num_layers,
+        hid_dim,
+        device: device.clone(),
+        dropout,
+    };
+    let bench_res_vit = bench_vit.run(TimingMethod::System).unwrap();
+    results_vit.push((0, BenchmarkComputations::new(&bench_res_vit)));
 
     print_bench_results(
         run_id,
         "encoders",
         backend,
-        &format!("FastEncoder ({})", backend),
-        "num_heads",
-        &results_fast,
-    );
-    print_bench_results(
-        run_id,
-        "encoders",
-        backend,
         &format!("ViTEncoder ({})", backend),
-        "num_heads",
+        "baseline",
         &results_vit,
     );
+
+    for (label, results) in variant_results {
+        print_bench_results(
+            run_id,
+            "encoders",
+            backend,
+            &format!("FastEncoder[{}] ({})", label, backend),
+            "variant",
+            &results,
+        );
+    }
 }
 
 fn main() {

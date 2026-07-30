@@ -76,8 +76,8 @@ mod tests {
     /// https://github.com/zlab-princeton/Derf/blob/main/ViT/dynamic_erf.py
     #[test]
     fn test_valid_erf() {
-        type B = burn::backend::cuda::Cuda;
-        let device = burn::backend::cuda::CudaDevice::default();
+        type B = burn::backend::flex::Flex;
+        let device = burn::backend::flex::FlexDevice::default();
 
         let input = Tensor::<B, 3>::from_floats(
             [

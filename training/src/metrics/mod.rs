@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
 use burn::Tensor;
-use burn::data::dataloader::Progress;
 use burn::tensor::Int;
 use burn::tensor::backend::Backend;
 use burn::train::ClassificationOutput;
@@ -139,88 +138,56 @@ impl<B: Backend> MetricsHandler<B> {
         }
     }
 
-    pub fn render_train(
+    pub fn render(
         &mut self,
         renderer: &mut impl MetricsRendererTraining,
-        progress: &Progress,
-        global_progress: &Progress,
-        iteration: usize,
-        epoch: usize,
+        metadata: &MetricMetadata,
+        split: Split,
     ) {
-        renderer.render_train(
-            TrainingProgress {
-                progress: Some(progress.clone()),
-                global_progress: global_progress.clone(),
-                iteration: Some(iteration),
+        let progress = metadata.progress.clone();
+        let global_progress = metadata.global_progress.clone();
+        let training_progress = TrainingProgress {
+            progress: Some(progress.clone()),
+            global_progress: global_progress.clone(),
+            iteration: Some(progress.items_processed - 1),
+        };
+        let progress_types = vec![
+            ProgressType::Detailed {
+                tag: "Iteration".to_string(),
+                progress: progress.clone(),
             },
-            vec![
-                ProgressType::Detailed {
-                    tag: "Iteration".to_string(),
-                    progress: progress.clone(),
-                },
-                ProgressType::Value {
-                    tag: "Epoch".to_string(),
-                    value: epoch,
-                },
-            ],
-        );
+            ProgressType::Value {
+                tag: "Epoch".to_string(),
+                value: global_progress.items_processed,
+            },
+        ];
+
+        let render_fn = match split {
+            Split::Train => MetricsRendererTraining::render_train,
+            Split::Valid => MetricsRendererTraining::render_valid,
+            Split::Test(_) => unimplemented!("Test case is not implemented for now"),
+        };
+        render_fn(renderer, training_progress, progress_types);
     }
 
-    pub fn render_valid(
-        &mut self,
-        renderer: &mut impl MetricsRendererTraining,
-        progress: &Progress,
-        global_progress: &Progress,
-        iteration: usize,
-        epoch: usize,
-    ) {
-        renderer.render_valid(
-            TrainingProgress {
-                progress: Some(progress.clone()),
-                global_progress: global_progress.clone(),
-                iteration: Some(iteration),
-            },
-            vec![
-                ProgressType::Detailed {
-                    tag: "Iteration".to_string(),
-                    progress: progress.clone(),
-                },
-                ProgressType::Value {
-                    tag: "Epoch".to_string(),
-                    value: epoch,
-                },
-            ],
-        );
-    }
-
-    pub fn update_train(
+    pub fn update(
         &mut self,
         output: &dyn MetricOutput<B>,
         metadata: &MetricMetadata,
         renderer: &mut impl MetricsRendererTraining,
         logger: &mut impl MetricLogger,
-        epoch: usize,
+        split: Split,
     ) {
+        let epoch = metadata.global_progress.items_processed;
         let (states, updates) = self.compute(output, metadata);
         for state in states {
-            renderer.update_train(state);
+            match split {
+                Split::Train => renderer.update_train(state),
+                Split::Valid => renderer.update_valid(state),
+                Split::Test(_) => unimplemented!("Test case is not implemented for now"),
+            };
         }
-        logger.log(MetricsUpdate::new(vec![], updates), epoch, &Split::Train);
-    }
-
-    pub fn update_valid(
-        &mut self,
-        output: &dyn MetricOutput<B>,
-        metadata: &MetricMetadata,
-        renderer: &mut impl MetricsRendererTraining,
-        logger: &mut impl MetricLogger,
-        epoch: usize,
-    ) {
-        let (states, updates) = self.compute(output, metadata);
-        for state in states {
-            renderer.update_valid(state);
-        }
-        logger.log(MetricsUpdate::new(vec![], updates), epoch, &Split::Valid);
+        logger.log(MetricsUpdate::new(vec![], updates), epoch, &split);
     }
 
     fn compute(

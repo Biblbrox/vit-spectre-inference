@@ -1,6 +1,4 @@
 use std::{
-    fs::File,
-    io::Write,
     panic,
     path::{Path, PathBuf},
     sync::Arc,
@@ -9,10 +7,11 @@ use std::{
 use burn::{
     backend::Autodiff,
     data::dataloader::Progress,
+    grad_clipping::GradientClippingConfig,
     lr_scheduler::{LrScheduler, cosine::CosineAnnealingLrSchedulerConfig},
     module::{AutodiffModule, Module},
     optim::{AdamWConfig, Optimizer},
-    record::{DefaultRecorder, Recorder},
+    record::{CompactRecorder, Recorder},
     tensor::backend::Backend,
     train::{
         InferenceStep, Interrupter, LearnerSummary, TrainStep,
@@ -30,23 +29,42 @@ use serde::Serialize;
 
 use crate::{
     augmentations::{Pipeline, builder::AugmentationBuilder},
+    config::ParsedConfig,
     data::dataset::{DatasetType, LazyDataset, LazyFiletype},
-    metrics::MetricsHandler,
-    models::ModelConfig,
+    metrics::{
+        MetricsHandler,
+        batchtime::{BatchTimeInput, BatchTimeMetric},
+        throughput::{ThroughputInput, ThroughputMetric},
+    },
+    models::{
+        ModelConfig, efficientvit::EfficientViTConfig, fast_vit::FastViTConfig,
+        fast_vit3d::FastViT3DConfig, vit::ViTConfig,
+    },
 };
 use crate::{config::DatasetConfig, data::dataloader::strategy::buffered::BufferedBatchStrategy};
-use crate::{config::SharedConfig, data::builder::StreamingDataLoaderBuilder};
+use crate::{config::SharedConfig, data::builder::StreamingDataLoaderBuilder, models::TrainConfig};
 
-pub trait Saveable: Serialize {
-    fn save(&self, path: &Path) {
-        let mut file = File::create(path).unwrap();
-        let content = toml::to_string_pretty(self).unwrap();
-        file.write_all(content.as_bytes()).unwrap();
+// Training options to customize behavior (artifact dir, TUI, callbacks).
+pub struct TrainOptions {
+    /// Override artifact directory path. None uses default `./experiments/{model}-{dataset}`.
+    pub artifact_dir: Option<String>,
+    /// Enable TUI metrics renderer. Default true.
+    pub enable_tui: bool,
+}
+
+impl Default for TrainOptions {
+    fn default() -> Self {
+        Self {
+            artifact_dir: None,
+            enable_tui: true,
+        }
     }
 }
 
-impl Saveable for SharedConfig {}
-impl Saveable for DatasetConfig {}
+fn save_config<T: Serialize>(value: &T, path: &Path) {
+    let content = toml::to_string_pretty(value).expect("serialize config");
+    std::fs::write(path, content).expect("write config");
+}
 
 pub fn build_metrics<B: Backend>() -> MetricsHandler<B> {
     MetricsHandler::<B>::new()
@@ -57,6 +75,122 @@ pub fn build_metrics<B: Backend>() -> MetricsHandler<B> {
         .add(TopKAccuracyMetric::new(5), |o| {
             TopKAccuracyInput::new(o.output(), o.targets())
         })
+    //.add(BatchTimeMetric::new(), |_| BatchTimeInput {})
+    //.add(ThroughputMetric::new(), |o| ThroughputInput {
+    //    batch_size: o.output().dims()[0],
+    //})
+}
+
+#[derive(serde::Deserialize)]
+struct OptimizerConfig {
+    adam_weight_decay: f64,
+    adam_betas: [f64; 2],
+}
+
+fn match_dataset(dataset_name: &str) -> DatasetType {
+    dataset_name
+        .parse::<DatasetType>()
+        .expect("Unknown dataset")
+}
+
+macro_rules! train_for_model {
+    (
+        $model_name:expr,
+        $model_table:expr,
+        $dataset_path:expr,
+        $shared:expr,
+        $dataset_cfg:expr,
+        $device:expr,
+        $ds_type:expr,
+        $optimizer:expr,
+        $options:expr,
+        $( $prefix:literal => $config_type:ty ),* $(,)?
+    ) => {
+        match $model_name.as_str() {
+            $(
+                name if name.starts_with($prefix) => {
+                    let model_cfg: $config_type = $model_table.try_into().unwrap();
+                    train::<B>(
+                        $dataset_path.into(),
+                        $shared,
+                        $dataset_cfg,
+                        $device,
+                        model_cfg,
+                        $ds_type,
+                        $optimizer,
+                        $options,
+                    );
+                }
+            )*
+            _ => panic!("Unknown model: {}", $model_name),
+        }
+    };
+}
+
+pub fn run_experiment<B: Backend>(config: ParsedConfig, device: B::Device) {
+    let optimizer_cfg: OptimizerConfig = config.model_table.clone().try_into().unwrap();
+    let ParsedConfig {
+        shared,
+        dataset: dataset_cfg,
+        model_table,
+    } = config;
+
+    let dataset_name = shared.active_dataset.clone();
+    let model_name = shared.active_model.clone();
+
+    let dataset_path = PathBuf::from(&shared.cache_dir).join(&dataset_name);
+    if !dataset_path.exists() {
+        panic!("Dataset path {} doesn't exist", dataset_path.display());
+    }
+    let dataset_path = dataset_path.to_str().unwrap();
+
+    let optimizer = AdamWConfig::new()
+        .with_weight_decay(optimizer_cfg.adam_weight_decay as f32)
+        .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
+        .with_beta_1(optimizer_cfg.adam_betas[0] as f32)
+        .with_beta_2(optimizer_cfg.adam_betas[1] as f32);
+
+    let ds_type = match_dataset(&dataset_name);
+
+    let options = TrainOptions::default();
+    train_for_model!(
+        model_name,
+        model_table,
+        dataset_path,
+        shared,
+        dataset_cfg,
+        device,
+        ds_type,
+        optimizer,
+        options,
+        "fast_vit_cloud" => FastViT3DConfig,
+        "fast_vit"      => FastViTConfig,
+        "vit"           => ViTConfig,
+        "efficientvit"  => EfficientViTConfig,
+    );
+}
+
+fn step_metadata(
+    iteration: usize,
+    total_iterations: usize,
+    epoch: usize,
+    total_epochs: usize,
+    lr: f64,
+) -> MetricMetadata {
+    let progress = Progress {
+        items_processed: iteration + 1,
+        items_total: total_iterations,
+    };
+    let global_progress = Progress {
+        items_processed: epoch,
+        items_total: total_epochs,
+    };
+    MetricMetadata {
+        progress: progress.clone(),
+        global_progress: global_progress.clone(),
+        iteration: Some(iteration),
+        lr: Some(lr),
+    }
 }
 
 pub fn train<B: Backend>(
@@ -67,35 +201,27 @@ pub fn train<B: Backend>(
     model: impl ModelConfig<B>,
     dataset: DatasetType,
     optimizer: AdamWConfig,
+    options: TrainOptions,
 ) {
     let file_type = dataset_cfg
         .dataset_type
         .parse::<LazyFiletype>()
         .expect("invalid dataset_type");
 
-    let artifact_dir: &String = &format!(
-        "./experiments/{}-{}",
-        shared.active_model, shared.active_dataset
-    );
-
-    let artifact_dir_clone = artifact_dir.clone();
-    panic::set_hook(Box::new(move |info| {
-        let backtrace = std::backtrace::Backtrace::capture();
-
-        let msg = format!("=== PANIC ===\n{info}\n\n=== BACKTRACE ===\n{backtrace}\n",);
-
-        let path = format!("{artifact_dir_clone}/panic.log");
-        if let Ok(mut f) = File::create(&path) {
-            let _ = f.write_all(msg.as_bytes());
-        }
-
-        eprintln!("{msg}");
-    }));
+    let artifact_dir: PathBuf = options
+        .artifact_dir
+        .unwrap_or_else(|| {
+            format!(
+                "./experiments/{}-{}",
+                shared.active_model, shared.active_dataset
+            )
+        })
+        .into();
 
     // Remove existing artifacts before to get an accurate learner summary
     if !shared.continue_training {
-        std::fs::remove_dir_all(artifact_dir).ok();
-        std::fs::create_dir_all(artifact_dir).ok();
+        std::fs::remove_dir_all(artifact_dir.clone()).ok();
+        std::fs::create_dir_all(artifact_dir.clone()).ok();
     }
     let batcher_train = dataset.make_batcher::<Autodiff<B>>();
     let batcher_val = dataset.make_batcher::<B>();
@@ -104,37 +230,42 @@ pub fn train<B: Backend>(
     let (pipeline_train, pipeline_val): (Pipeline<Autodiff<B>>, Pipeline<B>) =
         AugmentationBuilder::new().build(&dataset_cfg.augmentations, &device);
 
-    shared.save(PathBuf::from(format!("{artifact_dir}/shared_config.json")).as_path());
-    dataset_cfg.save(PathBuf::from(format!("{artifact_dir}/dataset_config.json")).as_path());
+    save_config(&shared, &artifact_dir.join("shared_config.json"));
+    save_config(&dataset_cfg, &artifact_dir.join("dataset_config.json"));
 
     B::seed(&device, shared.random_seed as u64);
 
-    let strategy = BufferedBatchStrategy::new(
+    let strategy_train = BufferedBatchStrategy::new(
         dataset_cfg.batch_size,
         dataset_cfg.batch_size,
         shared.num_workers as usize,
     );
 
     let dataloader_train = StreamingDataLoaderBuilder::<Autodiff<B>>::new(batcher_train)
-        .with_strategy(strategy.clone().with_shuffle(shared.random_seed as u64))
+        .with_strategy(strategy_train.with_shuffle(shared.random_seed as u64))
         .with_transforms(Arc::new(pipeline_train))
         .with_device(device.clone())
         .build(dataset.train(dataset_path.clone(), file_type.clone()));
+    let strategy_val = BufferedBatchStrategy::new(
+        dataset_cfg.val_batch_size,
+        dataset_cfg.val_batch_size,
+        shared.num_workers as usize,
+    );
     let dataloader_val = StreamingDataLoaderBuilder::<B>::new(batcher_val)
-        .with_strategy(strategy)
+        .with_strategy(strategy_val)
         .with_transforms(Arc::new(pipeline_val))
         .with_device(device.clone())
         .build(dataset.validation(dataset_path, file_type.clone()));
 
-    let recorder = DefaultRecorder::new();
+    let recorder = CompactRecorder::new();
 
     let num_iterations = dataloader_train.num_items() / dataset_cfg.batch_size;
-    let mut model = model.init_training(
-        &device,
-        dataset_cfg.in_channels,
-        dataset_cfg.img_size,
-        dataset_cfg.num_classes,
-    );
+    let train_config = TrainConfig {
+        in_channels: dataset_cfg.in_channels,
+        image_size: dataset_cfg.img_size,
+        num_classes: dataset_cfg.num_classes,
+    };
+    let mut model = model.init_training(&device, &train_config);
     let mut optimizer = optimizer.init();
     let mut scheduler = CosineAnnealingLrSchedulerConfig::new(
         shared.learning_rate,
@@ -147,45 +278,25 @@ pub fn train<B: Backend>(
     let mut valid_metrics = build_metrics::<B>();
 
     let mut stop_flag = false;
-    let mut logger = FileMetricLogger::new(artifact_dir);
+    let mut logger = FileMetricLogger::new(&artifact_dir);
     for definition in train_metrics.definitions() {
         logger.log_metric_definition(definition.clone());
     }
 
-    #[cfg(feature = "viz-rerun")]
-    let mut rerun_rec: Option<rerun::RecordingStream> = None;
-
     let interrupter = Interrupter::new();
-    let mut renderer = TuiMetricsRendererWrapper::new(interrupter.clone(), None);
-    valid_metrics.register(&mut renderer);
-    train_metrics.register(&mut renderer);
+    let mut renderer = Box::new(TuiMetricsRendererWrapper::new(interrupter.clone(), None));
+    valid_metrics.register(&mut *renderer);
+    train_metrics.register(&mut *renderer);
 
     for epoch in 1..=dataset_cfg.epochs {
-        let global_progress = Progress {
-            items_processed: epoch,
-            items_total: dataset_cfg.epochs,
-        };
-
-        #[cfg(feature = "viz-rerun")]
-        if rerun_rec.is_none() {
-            rerun_rec = Some(
-                rerun::RecordingStreamBuilder::new("lightmix")
-                    .save(format!("{artifact_dir}/validation.rrd"))
-                    .expect("Failed to create rerun recording stream"),
-            );
-        }
-
-        let mut lr = 0.0;
+        let mut lr = 0.0_f64;
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             if interrupter.should_stop() {
                 stop_flag = true;
                 break;
             }
 
-            let progress = Progress {
-                items_processed: iteration + 1,
-                items_total: num_iterations,
-            };
+            let metadata = step_metadata(iteration, num_iterations, epoch, dataset_cfg.epochs, lr);
 
             let step_output = model.step(batch);
             let output = step_output.item;
@@ -195,31 +306,18 @@ pub fn train<B: Backend>(
             model = optimizer.step(lr, model, grads);
 
             // Update metrics
-            let metrics_metadata = MetricMetadata {
-                progress: progress.clone(),
-                global_progress: global_progress.clone(),
-                iteration: Some(iteration),
-                lr: Some(lr),
-            };
-
-            train_metrics.update_train(
+            train_metrics.update(
                 &output,
-                &metrics_metadata,
-                &mut renderer,
+                &metadata,
+                &mut *renderer,
                 &mut logger,
-                epoch,
+                Split::Train,
             );
-            train_metrics.render_train(
-                &mut renderer,
-                &progress,
-                &global_progress,
-                iteration,
-                epoch,
-            );
+            train_metrics.render(&mut *renderer, &metadata, Split::Train);
         }
 
         let model_valid = model.valid();
-        let num_val_iterations = dataloader_val.num_items() / dataset_cfg.batch_size;
+        let num_val_iterations = dataloader_val.num_items() / dataset_cfg.val_batch_size;
 
         for (iteration, batch) in dataloader_val.iter().enumerate() {
             if interrupter.should_stop() {
@@ -227,72 +325,35 @@ pub fn train<B: Backend>(
                 break;
             }
 
-            let progress = Progress {
-                items_processed: iteration + 1,
-                items_total: num_val_iterations,
-            };
-
-            #[cfg(feature = "viz-rerun")]
-            let batch_clone = batch.clone();
+            let metadata =
+                step_metadata(iteration, num_val_iterations, epoch, dataset_cfg.epochs, lr);
 
             let step_output = model_valid.step(batch);
 
-            #[cfg(feature = "viz-rerun")]
-            if let Some(ref rec) = rerun_rec {
-                use crate::logging::log_3d_sample;
-
-                log_3d_sample(&step_output, &batch_clone, epoch, iteration as i64, rec);
-            }
-
-            let metrics_metadata = MetricMetadata {
-                progress: progress.clone(),
-                global_progress: global_progress.clone(),
-                iteration: Some(iteration),
-                lr: Some(lr),
-            };
-
-            valid_metrics.update_valid(
+            valid_metrics.update(
                 &step_output,
-                &metrics_metadata,
-                &mut renderer,
+                &metadata,
+                &mut *renderer,
                 &mut logger,
-                epoch,
+                Split::Valid,
             );
-            valid_metrics.render_valid(
-                &mut renderer,
-                &progress,
-                &global_progress,
-                iteration,
-                epoch,
-            );
+            valid_metrics.render(&mut *renderer, &metadata, Split::Valid);
         }
 
+        let model_path = artifact_dir.join(format!("model-epoch-{epoch}"));
+        let optim_path = artifact_dir.join(format!("optim-epoch-{epoch}"));
+        let sched_path = artifact_dir.join(format!("scheduler-epoch-{epoch}"));
         model
             .clone()
-            .save_file(format!("{artifact_dir}/model-epoch-{epoch}"), &recorder)
+            .save_file(model_path, &recorder)
             .expect("Checkpoint save failed");
 
-        <DefaultRecorder as Recorder<Autodiff<B>>>::record(
-            &recorder,
-            optimizer.to_record(),
-            format!("{artifact_dir}/optim-epoch-{epoch}").into(),
-        )
-        .ok();
-
-        <DefaultRecorder as Recorder<B>>::record(
-            &recorder,
-            scheduler.to_record::<B>(),
-            format!("{artifact_dir}/scheduler-epoch-{epoch}").into(),
-        )
-        .ok();
+        recorder.record(optimizer.to_record(), optim_path).ok();
+        Recorder::<B>::record(&recorder, scheduler.to_record::<B>(), sched_path).ok();
 
         logger.log_epoch_summary(EpochSummary {
             epoch_number: epoch,
             split: Split::Train,
-        });
-        logger.log_epoch_summary(EpochSummary {
-            epoch_number: epoch,
-            split: Split::Valid,
         });
 
         if stop_flag {
@@ -301,13 +362,8 @@ pub fn train<B: Backend>(
         }
     }
 
-    #[cfg(feature = "viz-rerun")]
-    if let Some(rec) = rerun_rec.take() {
-        drop(rec);
-    }
-
     // If we don't do that, renderer won't allow stdout to pass
-    drop(renderer);
+    drop(*renderer);
 
     let metric_names = train_metrics.metric_names();
     println!("{}", model);

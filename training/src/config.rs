@@ -39,50 +39,12 @@ fn default_dataset_type() -> String {
     "Arrow".to_string()
 }
 
-/// Temporary struct used only during config parsing (not serialized).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RawDatasetConfig {
-    pub num_classes: usize,
-    pub img_size: usize,
-    pub in_channels: usize,
-    pub batch_size: usize,
-    pub val_batch_size: usize,
-    pub epochs: usize,
-    #[serde(default)]
-    pub dataset_type: String,
-    #[serde(default)]
-    pub augmentation_pipeline: String,
-    #[serde(default)]
+/// Minimal struct for augmentation resolution (not serialized).
+#[derive(Debug, Clone)]
+struct RawDatasetAugmentations {
+    pub pipeline_name: String,
     pub transforms: Vec<String>,
-    /// Per-transform overrides as a table: [dataset.augmentations.transform_name]
-    #[serde(default)]
-    pub augmentations: std::collections::HashMap<String, toml::Value>,
-}
-
-impl From<RawDatasetConfig> for DatasetConfig {
-    fn from(raw: RawDatasetConfig) -> Self {
-        // Placeholder — resolved fields are set by resolve_dataset_augmentations()
-        DatasetConfig {
-            num_classes: raw.num_classes,
-            img_size: raw.img_size,
-            in_channels: raw.in_channels,
-            batch_size: raw.batch_size,
-            val_batch_size: raw.val_batch_size,
-            epochs: raw.epochs,
-            dataset_type: if raw.dataset_type.is_empty() {
-                "Arrow".to_string()
-            } else {
-                raw.dataset_type
-            },
-            augmentations: AugmentationConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OptimizerConfig {
-    pub adam_weight_decay: f64,
-    pub adam_betas: [f64; 2],
+    pub overrides: HashMap<String, toml::Value>,
 }
 
 pub struct ParsedConfig {
@@ -139,30 +101,30 @@ impl ParsedConfig {
                 &datasets_table,
                 &models_table,
                 local_table,
-                config_dir,
-                &pipelines,
             );
         }
 
-        // Resolve augmentations from pipeline defaults + dataset overrides
-        let raw_dataset: RawDatasetConfig = dataset_section.try_into().unwrap();
-        let resolved = Self::resolve_dataset_augmentations(&raw_dataset, &pipelines);
+        // Extract augmentation overrides before deserializing into DatasetConfig
+        let raw_augments = Self::extract_raw_augmentations(&dataset_section);
+
+        // Deserialize standard fields (augmentations key removed above)
+        let dataset_cfg: DatasetConfig = dataset_section.clone().try_into().unwrap();
 
         ParsedConfig {
             shared,
             dataset: DatasetConfig {
-                num_classes: raw_dataset.num_classes,
-                img_size: raw_dataset.img_size,
-                in_channels: raw_dataset.in_channels,
-                batch_size: raw_dataset.batch_size,
-                val_batch_size: raw_dataset.val_batch_size,
-                epochs: raw_dataset.epochs,
-                dataset_type: if raw_dataset.dataset_type.is_empty() {
+                num_classes: dataset_cfg.num_classes,
+                img_size: dataset_cfg.img_size,
+                in_channels: dataset_cfg.in_channels,
+                batch_size: dataset_cfg.batch_size,
+                val_batch_size: dataset_cfg.val_batch_size,
+                epochs: dataset_cfg.epochs,
+                dataset_type: if dataset_cfg.dataset_type.is_empty() {
                     "Arrow".to_string()
                 } else {
-                    raw_dataset.dataset_type
+                    dataset_cfg.dataset_type
                 },
-                augmentations: resolved,
+                augmentations: Self::resolve_dataset_augmentations(&raw_augments, &pipelines),
             },
             model_table: model_section,
         }
@@ -175,13 +137,12 @@ impl ParsedConfig {
         datasets_table: &Table,
         models_table: &Table,
         local_table: Table,
-        _config_dir: &Path,
-        _pipelines: &HashMap<String, PipelineDefaults>,
     ) -> (SharedConfig, Table, Table) {
         let mut dataset_name = shared.active_dataset.clone();
         let mut model_name = shared.active_model.clone();
 
         // Extract active_dataset/active_model from local_table for section selection
+
         if let Some(ds) = local_table.get("active_dataset").and_then(|v| v.as_str()) {
             dataset_name = ds.to_string();
         }
@@ -189,32 +150,14 @@ impl ParsedConfig {
             model_name = md.to_string();
         }
 
-        // Collect shared fields
-        let mut local_shared_keys: Vec<(String, &Value)> = vec![];
-        for (key, value) in &local_table {
-            match key.as_str() {
-                "random_seed" | "learning_rate" | "cache_dir" | "num_workers"
-                | "continue_training" | "resume_epoch" | "active_dataset" | "active_model" => {
-                    local_shared_keys.push((key.clone(), value));
-                }
-                _ => {}
-            }
-        }
+        // Merge local overrides into shared config and re-parse
+        let mut merged_shared = shared_table.clone();
+        override_conf(&mut merged_shared, &local_table);
+        shared = merged_shared.try_into().unwrap();
 
         // Update dataset_section and model_section after potential name changes
         let mut dataset_section = datasets_table[&dataset_name].as_table().cloned().unwrap();
         let mut model_section = models_table[&model_name].as_table().cloned().unwrap();
-
-        // Re-parse shared after merging local overrides
-        if !local_shared_keys.is_empty() {
-            let mut local_shared = Table::new();
-            for (key, value) in local_shared_keys {
-                local_shared.insert(key, (*value).clone());
-            }
-            let mut merged_shared = shared_table.clone();
-            override_conf(&mut merged_shared, &local_shared);
-            shared = merged_shared.try_into().unwrap();
-        }
 
         // Merge dataset section from local if present
         if let Some(ds_local) = local_table.get(&dataset_name).and_then(|v| v.as_table()) {
@@ -231,25 +174,22 @@ impl ParsedConfig {
 
     /// Resolve a dataset's AugmentationConfig from pipeline defaults + table-based overrides.
     fn resolve_dataset_augmentations(
-        raw: &RawDatasetConfig,
+        raw: &RawDatasetAugmentations,
         pipelines: &HashMap<String, PipelineDefaults>,
     ) -> AugmentationConfig {
-        if raw.augmentation_pipeline.is_empty() || raw.transforms.is_empty() {
+        if raw.pipeline_name.is_empty() || raw.transforms.is_empty() {
             // No pipeline or no transforms specified — return empty config
             return AugmentationConfig::default();
         }
 
         // Look up the named pipeline (panic with clear error if not found)
-        let pipeline = pipelines
-            .get(&raw.augmentation_pipeline)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Dataset '{}' references unknown augmentation pipeline '{}'. Available: {:?}",
-                    raw.num_classes,
-                    raw.augmentation_pipeline,
-                    pipelines.keys().collect::<Vec<_>>()
-                )
-            });
+        let pipeline = pipelines.get(&raw.pipeline_name).unwrap_or_else(|| {
+            panic!(
+                "Dataset references unknown augmentation pipeline '{}'. Available: {:?}",
+                raw.pipeline_name,
+                pipelines.keys().collect::<Vec<_>>()
+            )
+        });
 
         let find_default = |name: &str, kind: &str| -> Option<&PipelineDefault> {
             pipeline
@@ -263,7 +203,7 @@ impl ParsedConfig {
         for transform_name in &raw.transforms {
             for kind in &["train", "val"] {
                 if let Some(default_transform) = find_default(transform_name, kind) {
-                    let params = match raw.augmentations.get(transform_name.as_str()) {
+                    let params = match raw.overrides.get(transform_name.as_str()) {
                         Some(override_table) => {
                             Self::deep_merge_params(&default_transform.params, override_table)
                         }
@@ -290,6 +230,70 @@ impl ParsedConfig {
         }
     }
 
+    /// Extract augmentation-related fields from a dataset TOML section before deserializing
+    /// the rest into DatasetConfig. Removes the 'augmentations' key so DatasetConfig can be
+    /// deserialized cleanly (it expects AugmentationConfig, not a raw table).
+    fn extract_raw_augmentations(section: &Table) -> RawDatasetAugmentations {
+        let pipeline_name = section
+            .get("augmentation_pipeline")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let transforms: Vec<String> = section
+            .get("transforms")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let overrides: HashMap<String, toml::Value> = section
+            .get("augmentations")
+            .and_then(|v| match v {
+                toml::Value::Table(table) => Some(
+                    table
+                        .iter()
+                        .filter_map(|(k, val)| {
+                            if val.is_table() || val.is_array() {
+                                Some((k.clone(), val.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<HashMap<_, _>>(),
+                ),
+                toml::Value::Array(arr) => Some(
+                    arr.iter()
+                        .filter_map(|table| {
+                            if let toml::Value::Table(t) = table {
+                                let mut map = HashMap::new();
+                                for (k, v) in t.iter() {
+                                    if !v.is_integer() && !v.is_bool() {
+                                        map.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                Some(map)
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten()
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        RawDatasetAugmentations {
+            pipeline_name,
+            transforms,
+            overrides,
+        }
+    }
+
     /// Deep-merge override params into default params. Override values fill/overwrite defaults.
     fn deep_merge_params(
         defaults: &HashMap<String, toml::Value>,
@@ -299,6 +303,12 @@ impl ParsedConfig {
         if let Some(override_table) = overrides.as_table() {
             for (k, v) in override_table {
                 merged.insert(k.clone(), v.clone());
+            }
+        } else if let Some(override_array) = overrides.as_array() {
+            for table in override_array.iter().filter_map(|v| v.as_table()) {
+                for (k, v) in table {
+                    merged.insert(k.clone(), v.clone());
+                }
             }
         }
         merged
@@ -361,15 +371,11 @@ impl ParsedConfig {
     pub fn model<M: DeserializeOwned>(&self) -> M {
         self.model_table.clone().try_into().unwrap()
     }
-
-    pub fn optimizer(&self) -> OptimizerConfig {
-        self.model_table.clone().try_into().unwrap()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{DatasetConfig, OptimizerConfig, ParsedConfig, SharedConfig};
+    use crate::config::{DatasetConfig, ParsedConfig, SharedConfig};
     use crate::models::fast_vit::FastViTConfig;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -419,15 +425,14 @@ orientation = "horizontal"
         let models = r#"
 [model]
 patch_size = 7
-num_heads = 8
 dropout = 0.1
 hidden_dim = 256
 adam_weight_decay = 0.0001
 adam_betas = [0.9, 0.999]
 activation = "gelu"
 num_encoders = 6
-embed_dim = 512
-sinkhorn_temp = 0.1
+nheads = 3
+dmodel = 512
 "#;
         std::fs::write(dir.path().join("models.toml"), models).unwrap();
 
@@ -514,13 +519,17 @@ hidden_dim = 128
         let model: FastViTConfig = config.model();
 
         assert_eq!(model.patch_size, 7);
-        assert_eq!(model.num_heads, 8);
         assert_eq!(model.dropout, 0.1);
         assert_eq!(model.hidden_dim, 256);
         assert_eq!(model.activation, "gelu");
         assert_eq!(model.num_encoders, 6);
-        assert_eq!(model.embed_dim, 512);
-        assert_eq!(model.sinkhorn_temp, 0.1);
+        assert_eq!(model.dmodel, 512);
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct OptimizerConfigTest {
+        adam_weight_decay: f64,
+        adam_betas: [f64; 2],
     }
 
     #[test]
@@ -528,7 +537,7 @@ hidden_dim = 128
         let dir = create_test_config();
         let config_dir = &dir.path();
         let config = ParsedConfig::load(config_dir, None);
-        let optimizer: OptimizerConfig = config.optimizer();
+        let optimizer: OptimizerConfigTest = config.model_table.clone().try_into().unwrap();
 
         assert_eq!(optimizer.adam_weight_decay, 0.0001);
         assert_eq!(optimizer.adam_betas, [0.9, 0.999]);
@@ -582,33 +591,5 @@ hidden_dim = 128
         // Fields not overridden should retain base values
         assert_eq!(dataset.num_classes, 10);
         assert_eq!(model.patch_size, 7);
-    }
-
-    #[test]
-    fn test_override_adds_new_fields() {
-        let dir = create_test_config();
-        let config_dir = &dir.path();
-
-        // Create a local file that only overrides specific fields
-        let local_content = r#"
-[mnist]
-batch_size = 16
-
-[model]
-num_heads = 4
-"#;
-        let local_path = dir.path().join("experiments.local.toml");
-        std::fs::write(&local_path, local_content).unwrap();
-
-        let config = ParsedConfig::load(config_dir, Some(&local_path));
-        let (_, dataset, model_table) = config.unpack();
-        let model: FastViTConfig = model_table.try_into().unwrap();
-
-        assert_eq!(dataset.batch_size, 16);
-        assert_eq!(model.num_heads, 4);
-
-        // Unchanged fields should retain base values
-        assert_eq!(dataset.num_classes, 10);
-        assert_eq!(model.embed_dim, 512);
     }
 }

@@ -1,18 +1,10 @@
-pub mod cifar10;
-pub mod cifar100;
-pub mod fashionmnist;
-pub mod food101;
-pub mod imagenet1k;
-pub mod mnist;
 pub mod modelnet40;
-pub mod tinyimagenet;
 
 use std::sync::Arc;
 
-use burn::tensor::{DType, Int, TensorData};
+use burn::tensor::{DType, Int, Shape, TensorData};
 use burn::{prelude::Tensor, tensor::backend::Backend};
 use polars::prelude::*;
-
 
 use crate::augmentations::Pipeline;
 
@@ -32,7 +24,7 @@ impl<B: Backend> Batch<B> {
         let mut rng = fastrand::Rng::with_seed(seed);
         for i in (1..b as i32).rev() {
             let j = rng.usize(0..=(i as usize));
-            indices.swap(i as usize, j as usize);
+            indices.swap(i as usize, j);
         }
         let idx = Tensor::<B, 1, Int>::from_ints(indices.as_slice(), &device);
         Self {
@@ -73,35 +65,26 @@ impl<B: Backend> Batch<B> {
 
 /// Unified batcher trait for all data types.
 pub trait Batcher<B: Backend>: Send + Sync {
-    fn image_batch(
+    fn generic_batch(
         &self,
         df: DataFrame,
         transforms: Arc<Pipeline<B>>,
-        img_width: usize,
-        img_height: usize,
-        image_col: &str,
+        shape: Shape,
+        data_col: &str,
         label_col: &str,
-        channels: usize,
         device: &B::Device,
     ) -> Batch<B> {
-        let batch_size = df.height();
-
-        let total_images = batch_size * img_width * img_height * channels;
-        let mut imagebuf: Vec<u8> = Vec::with_capacity(total_images);
-        df.column(image_col)
+        let flat_size = shape.clone().flatten().len();
+        let mut buf: Vec<u8> = Vec::with_capacity(flat_size);
+        df.column(data_col)
             .unwrap()
             .binary()
             .unwrap()
             .iter()
             .flatten()
-            .for_each(|chunk| imagebuf.extend_from_slice(chunk));
+            .for_each(|chunk| buf.extend_from_slice(chunk));
 
-        let imagedata = TensorData::from_bytes_vec(
-            imagebuf,
-            [batch_size, img_width, img_height, channels],
-            DType::U8,
-        )
-        .convert_dtype(DType::F32);
+        let data = TensorData::from_bytes_vec(buf, shape, DType::U8).convert_dtype(DType::F32);
         let labelbuf: Vec<i64> = df
             .column(label_col)
             .unwrap()
@@ -111,14 +94,15 @@ pub trait Batcher<B: Backend>: Send + Sync {
             .collect();
 
         let labels = Tensor::<B, 1, Int>::from_ints(labelbuf.as_slice(), device);
-        let images = transforms.execute(
-            Tensor::<B, 4>::from_data(imagedata, device)
-                .swap_dims(1, -1)
+        let transformed = transforms.execute(
+            Tensor::<B, 4>::from_data(data, device)
+                //.swap_dims(1, -1)
+                .permute([0, 3, 1, 2])
                 .div_scalar(255),
         );
 
         Batch {
-            data: images.flatten::<1>(0, -1),
+            data: transformed.flatten::<1>(0, -1),
             targets: labels,
         }
     }

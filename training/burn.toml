@@ -1,16 +1,16 @@
 [fusion.beam_search]
-max_blocks = 5     # usize. Higher = more fusion opportunities, more cache misses.
+max_blocks = 5  # usize. Higher = more fusion opportunities, more cache misses.
 
 [cubecl.autotune]
 level = "full"  # "minimal" | "balanced" | "extensive" | "full"
-cache = "target"    # "local" | "target" | "global" | { file = "<path>" }
+cache = "target"  # "local" | "target" | "global" | { file = "<path>" }
 
 [cubecl.compilation]
-check_mode = "auto" # "enforce" | "validate" | "auto"
-cache = "target"    # "local" | "target" | "global" | { file = "<path>" }
+check_mode = "auto"  # "enforce" | "validate" | "auto"
+cache = "target"  # "local" | "target" | "global" | { file = "<path>" }
 
 [cubecl.streaming]
-max_streams = 8     # u8
+max_streams = 8  # u8
 
 [cubecl.memory]
 persistent_memory = "enabled"  # "enabled" | "disabled" | "enforced"

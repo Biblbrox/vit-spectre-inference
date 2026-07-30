@@ -1,17 +1,14 @@
 #![recursion_limit = "2048"]
 
-use std::path::PathBuf;
+use std::{fs::File, io::Write, panic, path::PathBuf};
 
-use burn::{grad_clipping::GradientClippingConfig, optim::AdamWConfig, tensor::backend::Backend};
-use lightmix::{
-    config::{OptimizerConfig, ParsedConfig},
-    data::dataset::DatasetType,
-    models::{
-        efficientvit::EfficientViTConfig, fast_vit::FastViTConfig, fast_vit3d::FastViT3DConfig,
-        vit::ViTConfig,
-    },
-    training::train,
-};
+use burn::tensor::backend::Backend;
+use lightmix::models::efficientvit::EfficientViTConfig;
+use lightmix::models::fast_vit::FastViTConfig;
+use lightmix::models::fast_vit3d::FastViT3DConfig;
+use lightmix::models::vit::ViTConfig;
+use lightmix::utils::print_model_info;
+use lightmix::{config::ParsedConfig, training::run_experiment};
 
 #[cfg(feature = "jemalloc")]
 use tikv_jemallocator::Jemalloc;
@@ -20,88 +17,46 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-fn match_dataset(dataset_name: &str) -> DatasetType {
-    dataset_name
-        .parse::<DatasetType>()
-        .expect("Unknown dataset")
+macro_rules! info_for_model {
+    (
+        $model_name:expr,
+        $model_table:expr,
+        $shared:expr,
+        $dataset_cfg:expr,
+        $device:expr,
+        $( $prefix:literal => $config_type:ty ),* $(,)?
+    ) => {
+        match $model_name.as_str() {
+            $(
+                name if name.starts_with($prefix) => {
+                    let model_cfg: $config_type = $model_table.try_into().unwrap();
+                    print_model_info::<B>($shared, $dataset_cfg, $device, model_cfg);
+                }
+            )*
+            _ => panic!("Unknown model: {}", $model_name),
+        }
+    };
 }
 
-fn run_experiment<B: Backend>(config: ParsedConfig, device: B::Device) {
-    let optimizer_cfg: OptimizerConfig = config.optimizer();
+pub fn run_info<B: Backend>(config: ParsedConfig, device: B::Device) {
     let ParsedConfig {
         shared,
         dataset: dataset_cfg,
         model_table,
     } = config;
-
-    let dataset_name = shared.active_dataset.clone();
     let model_name = shared.active_model.clone();
 
-    let dataset_path = PathBuf::from(&shared.cache_dir).join(&dataset_name);
-    if !dataset_path.exists() {
-        eprintln!("Dataset path {} doesn't exist", dataset_path.display());
-    }
-    let dataset_path = dataset_path.to_str().unwrap();
-
-    let optimizer = AdamWConfig::new()
-        .with_weight_decay(optimizer_cfg.adam_weight_decay as f32)
-        .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
-        .with_beta_1(optimizer_cfg.adam_betas[0] as f32)
-        .with_beta_2(optimizer_cfg.adam_betas[1] as f32);
-
-    let ds_type = match_dataset(&dataset_name);
-
-    match model_name.as_str() {
-        name if name.starts_with("fast_vit_cloud") => {
-            let model_cfg: FastViT3DConfig = model_table.try_into().unwrap();
-            train::<B>(
-                dataset_path.into(),
-                shared,
-                dataset_cfg,
-                device,
-                model_cfg,
-                ds_type,
-                optimizer,
-            );
-        }
-        name if name.starts_with("fast_vit") => {
-            let model_cfg: FastViTConfig = model_table.try_into().unwrap();
-            train::<B>(
-                dataset_path.into(),
-                shared,
-                dataset_cfg,
-                device,
-                model_cfg,
-                ds_type,
-                optimizer,
-            );
-        }
-        name if name.starts_with("vit") => {
-            let model_cfg: ViTConfig = model_table.try_into().unwrap();
-            train::<B>(
-                dataset_path.into(),
-                shared,
-                dataset_cfg,
-                device,
-                model_cfg,
-                ds_type,
-                optimizer,
-            );
-        }
-        name if name.starts_with("efficientvit") => {
-            let model_cfg: EfficientViTConfig = model_table.try_into().unwrap();
-            train::<B>(
-                dataset_path.into(),
-                shared,
-                dataset_cfg,
-                device,
-                model_cfg,
-                ds_type,
-                optimizer,
-            );
-        }
-        _ => panic!("Unknown model: {}", model_name),
-    }
+    info_for_model!(
+        model_name,
+        model_table,
+        shared,
+        dataset_cfg,
+        device,
+        "fast_vit_cloud" => FastViT3DConfig,
+        "fast_vit"      => FastViTConfig,
+        "vit"           => ViTConfig,
+        "efficientvit"  => EfficientViTConfig,
+    );
 }
 
 fn main() {
@@ -114,5 +69,24 @@ fn main() {
     let config = ParsedConfig::load(&config_dir, Some(&localpath));
     println!("Config loaded from {}", config_dir.display());
 
-    run_experiment::<MyBackend>(config, device);
+    panic::set_hook(Box::new(move |info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+
+        let msg = format!("=== PANIC ===\n{info}\n\n=== BACKTRACE ===\n{backtrace}\n",);
+
+        if let Ok(mut f) = File::create("panic.log") {
+            let _ = f.write_all(msg.as_bytes());
+        }
+
+        eprintln!("{msg}");
+    }));
+
+    let command = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "train".to_string());
+    match command.as_str() {
+        "info" => run_info::<MyBackend>(config, device),
+        "train" => run_experiment::<MyBackend>(config, device),
+        other => eprintln!("Unknown command: '{other}' (expected 'train' or 'info')"),
+    }
 }

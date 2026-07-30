@@ -1,4 +1,10 @@
+use burn::{module::Module, tensor::backend::Backend};
 use fastrand::Rng;
+
+use crate::{
+    config::{DatasetConfig, SharedConfig},
+    models::{ModelConfig, TrainConfig},
+};
 
 pub fn gcd(mut a: usize, mut b: usize) -> usize {
     while b != 0 {
@@ -67,4 +73,69 @@ pub fn sample_beta(rng: &mut Rng, alpha: f64, beta: f64) -> f64 {
         return 0.5;
     }
     x / (x + y)
+}
+
+pub fn print_model_info<B: Backend>(
+    shared: SharedConfig,
+    dataset_cfg: DatasetConfig,
+    device: B::Device,
+    model: impl ModelConfig<B>,
+) {
+    let train_config = TrainConfig {
+        in_channels: dataset_cfg.in_channels,
+        image_size: dataset_cfg.img_size,
+        num_classes: dataset_cfg.num_classes,
+    };
+
+    let model = model.init_training(&device, &train_config);
+
+    println!("=== Configuration ===");
+    println!("Model:      {}", shared.active_model);
+    println!("Dataset:    {}", shared.active_dataset);
+    println!("Image size: {}", dataset_cfg.img_size);
+    println!("Classes:    {}", dataset_cfg.num_classes);
+    println!();
+
+    println!("=== Augmentations ===");
+    let mut aug_table = toml::value::Table::new();
+    aug_table.insert(
+        "augmentations".to_string(),
+        toml::Value::try_from(&dataset_cfg.augmentations).expect("serialize augmentations"),
+    );
+    println!(
+        "{}",
+        toml::to_string_pretty(&aug_table).expect("format augmentations")
+    );
+
+    println!("=== Model structure ===");
+    println!("{}", model);
+
+    let num_params = model.num_params();
+    let bytes_f32 = num_params * 4;
+    let bytes_f16 = num_params * 2;
+
+    println!("=== Model size ===");
+    println!("Parameters: {}", format_param_count(num_params));
+    println!("Size (f32): {}", format_bytes(bytes_f32));
+    println!("Size (f16): {}", format_bytes(bytes_f16));
+}
+
+fn format_param_count(n: usize) -> String {
+    match n {
+        n if n >= 1_000_000_000 => format!("{:.2}B", n as f64 / 1e9),
+        n if n >= 1_000_000 => format!("{:.2}M", n as f64 / 1e6),
+        n if n >= 1_000 => format!("{:.2}K", n as f64 / 1e3),
+        n => n.to_string(),
+    }
+}
+
+fn format_bytes(bytes: usize) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.2} GiB", b / GIB)
+    } else {
+        format!("{:.2} MiB", b / MIB)
+    }
 }

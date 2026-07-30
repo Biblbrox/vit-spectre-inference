@@ -1,19 +1,4 @@
 #[cfg(feature = "decode")]
-pub mod cifar10;
-#[cfg(feature = "decode")]
-pub mod cifar100;
-#[cfg(feature = "decode")]
-pub mod fashionmnist;
-#[cfg(feature = "decode")]
-pub mod food101;
-#[cfg(feature = "decode")]
-pub mod imagenet1k;
-#[cfg(feature = "decode")]
-pub mod mnist;
-#[cfg(feature = "decode")]
-pub mod tinyimagenet;
-
-#[cfg(feature = "decode")]
 use std::io::Cursor;
 
 #[cfg(feature = "decode")]
@@ -52,4 +37,29 @@ pub fn decode_image_lazy(df: DataFrame, image_col: &'static str) -> DataFrame {
         .collect_with_engine(Engine::Streaming)
         .unwrap()
         .unwrap_single()
+}
+
+#[cfg(feature = "decode")]
+macro_rules! define_image_mapper {
+    ($($name:ident => $col:expr),* $(,)?) => {
+        $(
+            pub struct $name;
+            impl $name {
+                pub fn decoder() -> FrameMapper {
+                    Arc::new(|df| decode_image_lazy(df, $col))
+                }
+            }
+        )*
+    };
+}
+
+#[cfg(feature = "decode")]
+define_image_mapper! {
+    MnistMapper => "image",
+    FashionMnistMapper => "image",
+    Food101Mapper => "image",
+    ImageNet1kMapper => "image",
+    TinyImageNetMapper => "image",
+    Cifar10Mapper => "img",
+    Cifar100Mapper => "img",
 }

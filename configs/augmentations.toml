@@ -1,5 +1,4 @@
 [defaults.image]
-
 [[defaults.image.transforms]]
 name = "normalize"
 kind = "val"
@@ -58,7 +57,6 @@ kind = "train"
 probability = 0.5
 
 [defaults.cloud]
-
 [[defaults.cloud.transforms]]
 name = "normalize"
 kind = "val"
