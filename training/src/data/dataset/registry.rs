@@ -4,8 +4,7 @@ use paste::paste;
 use super::{LazyDataset, LazyFiletype};
 use crate::augmentations::Pipeline;
 use crate::data::batch::Batch;
-use burn::tensor::Shape;
-use burn::tensor::backend::Backend;
+use burn::{backend::Backend, prelude::Shape, tensor::Device};
 use polars::prelude::*;
 use std::{str::FromStr, sync::Arc};
 
@@ -55,7 +54,7 @@ impl DatasetType {
         }
     }
 
-    pub fn make_batcher<B: Backend>(&self) -> Arc<dyn Batcher<B>> {
+    pub fn make_batcher(&self) -> Arc<dyn Batcher> {
         match self {
             Self::Cifar10 => Cifar10Batcher::new(),
             Self::Cifar100 => Cifar100Batcher::new(),
@@ -121,13 +120,13 @@ macro_rules! define_dataset {
                 }
             }
 
-            impl<B: Backend> Batcher<B> for [<$name Batcher>] {
+            impl Batcher for [<$name Batcher>] {
                 fn batch(
                     &self,
                     df: DataFrame,
-                    transforms: Arc<Pipeline<B>>,
-                    device: &B::Device,
-                ) -> Batch<B> {
+                    transforms: Arc<Pipeline>,
+                    device: &Device,
+                ) -> Batch {
                     let b = df.height();
                     self.generic_batch(
                         df,

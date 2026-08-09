@@ -1,4 +1,5 @@
-use burn::{config::Config, module::Module, prelude::Tensor, tensor::backend::Backend};
+
+use burn::{config::Config, module::Module, prelude::{Device, Tensor}, backend::Backend};
 
 use crate::attention::{
     NormalizationMode,
@@ -17,14 +18,15 @@ pub struct SinkformerMixerConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct SinkformerMixer<B: Backend> {
-    mha_attn: SelfAttention<B>,
+pub struct SinkformerMixer {
+    mha_attn: SelfAttention,
     temperature: f32,
     n_heads: usize,
+    
 }
 
-impl<B: Backend> SinkformerMixer<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl SinkformerMixer {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let (scores, v) = self.mha_attn.scores(x);
         let scores = sinkhorn(scores, self.temperature, NormalizationMode::Double);
         self.mha_attn.apply_output(scores, v)
@@ -32,7 +34,7 @@ impl<B: Backend> SinkformerMixer<B> {
 }
 
 impl SinkformerMixerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SinkformerMixer<B> {
+    pub fn init(&self, device: &Device) -> SinkformerMixer {
         SinkformerMixer {
             temperature: self.temperature,
             n_heads: self.n_heads,

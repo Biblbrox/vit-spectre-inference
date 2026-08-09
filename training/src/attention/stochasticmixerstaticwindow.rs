@@ -1,7 +1,9 @@
+
 use burn::{
     module::{Module, Param},
-    prelude::Tensor,
-    tensor::{Distribution, Int, activation::softmax, backend::Backend},
+    prelude::{Device, Tensor},
+    backend::Backend,
+    tensor::{Distribution, Int, activation::softmax},
 };
 
 use crate::attention::{
@@ -53,23 +55,24 @@ impl StochasticAttentionStaticWindowConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct StochasticAttentionStaticWindow<B: Backend> {
-    q_idx: Tensor<B, 1, Int>,
-    k_idx: Tensor<B, 1, Int>,
-    v_idx: Tensor<B, 1, Int>,
+pub struct StochasticAttentionStaticWindow {
+    q_idx: Tensor<1, Int>,
+    k_idx: Tensor<1, Int>,
+    v_idx: Tensor<1, Int>,
     inv_scale: f32,
-    band_bias: Param<Tensor<B, 5>>, // [H, N, 2w+1]
+    band_bias: Param<Tensor<5>>, // [H, N, 2w+1]
     temperature: f32,
     half_width: usize,
     nhead: usize,
     dk: usize,
-    window_indices: Tensor<B, 1, Int>, // [N * bw]
+    window_indices: Tensor<1, Int>, // [N * bw]
     score_mode: StochasticMul,
     seq_length: usize,
+    
 }
 
-impl<B: Backend> StochasticAttentionStaticWindow<B> {
-    fn local_window(&self, x: Tensor<B, 4>) -> Tensor<B, 5> {
+impl StochasticAttentionStaticWindow {
+    fn local_window(&self, x: Tensor<4>) -> Tensor<5> {
         let [b, n, h, dk] = x.dims();
         let bw = 2 * self.half_width + 1;
 
@@ -84,7 +87,7 @@ impl<B: Backend> StochasticAttentionStaticWindow<B> {
             .permute([0, 1, 3, 4, 2]) // [B, N, H, dk, bw]
     }
 
-    fn calc_qkv_hard(&self, x: Tensor<B, 4>) -> (Tensor<B, 5>, Tensor<B, 5>, Tensor<B, 5>) {
+    fn calc_qkv_hard(&self, x: Tensor<4>) -> (Tensor<5>, Tensor<5>, Tensor<5>) {
         let q = x.clone().select(3, self.q_idx.clone()).unsqueeze_dim(3);
         let k = self.local_window(x.clone().select(3, self.k_idx.clone()));
         //let v = self.local_window(x.select(3, self.v_idx.clone()));
@@ -93,7 +96,7 @@ impl<B: Backend> StochasticAttentionStaticWindow<B> {
         (q, k, self.local_window(x))
     }
 
-    fn calc_scores(&self, q: Tensor<B, 5>, k_win: Tensor<B, 5>) -> Tensor<B, 5> {
+    fn calc_scores(&self, q: Tensor<5>, k_win: Tensor<5>) -> Tensor<5> {
         let scores = q.matmul(k_win) * self.inv_scale + self.band_bias.val();
         match self.score_mode {
             StochasticMul::Softmax => softmax(scores, 4),
@@ -104,7 +107,7 @@ impl<B: Backend> StochasticAttentionStaticWindow<B> {
         } // [B,N,H,1,bw]
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -120,7 +123,7 @@ impl<B: Backend> StochasticAttentionStaticWindow<B> {
 }
 
 impl StochasticAttentionStaticWindowConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticAttentionStaticWindow<B> {
+    pub fn init(&self, device: &Device) -> StochasticAttentionStaticWindow {
         let w = (self.kernel_size - 1) / 2;
         let window = 2 * w + 1;
         let dk = self.embed_dim / self.nhead; // head dim
@@ -128,19 +131,19 @@ impl StochasticAttentionStaticWindowConfig {
 
         let logit_std = (1.0 / dk as f64).sqrt();
 
-        let pos = Tensor::<B, 1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
-        let offsets = Tensor::<B, 1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
+        let pos = Tensor::<1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
+        let offsets = Tensor::<1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
             .reshape([1, 1, 1, window]);
         let window_indices = (pos + offsets).clamp(0, n as i64 - 1); // [1, N, 1, bw]
 
         let init_logits = || {
-            Tensor::<B, 4>::random([1, 1, dk, dk], Distribution::Normal(0.0, logit_std), device)
+            Tensor::<4>::random([1, 1, dk, dk], Distribution::Normal(0.0, logit_std), device)
                 .argmax(2)
                 .reshape([dk])
         };
 
         StochasticAttentionStaticWindow {
-            band_bias: Param::from_tensor(Tensor::<B, 5>::zeros(
+            band_bias: Param::from_tensor(Tensor::<5>::zeros(
                 [1, self.seq_length, self.nhead, 1, window],
                 device,
             ))

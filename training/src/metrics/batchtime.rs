@@ -1,5 +1,5 @@
 use burn::{
-    tensor::backend::Backend,
+    backend::Backend,
     train::{
         ClassificationOutput,
         metric::{
@@ -12,7 +12,7 @@ use std::{sync::Arc, time::Instant};
 
 pub struct BatchTimeInput;
 
-impl<B: Backend> Adaptor<BatchTimeInput> for ClassificationOutput<B> {
+impl Adaptor<BatchTimeInput> for ClassificationOutput {
     fn adapt(&self) -> BatchTimeInput {
         BatchTimeInput
     }
@@ -81,6 +81,18 @@ impl Metric for BatchTimeMetric {
         )
     }
 
+    fn compute(&mut self) -> SerializedEntry {
+        if self.count > 0 {
+            let avg = self.total_ms / self.count as f64;
+            SerializedEntry::new(
+                format!("{:.2}ms", avg),
+                avg.to_string(),
+            )
+        } else {
+            SerializedEntry::new("0.00ms".to_string(), "0.0".to_string())
+        }
+    }
+
     fn clear(&mut self) {
         self.last_tick = None;
         self.current_ms = 0.0;
@@ -90,18 +102,26 @@ impl Metric for BatchTimeMetric {
 }
 
 impl Numeric for BatchTimeMetric {
-    fn value(&self) -> NumericEntry {
-        NumericEntry::Value(self.current_ms)
+    fn value(&self) -> Option<NumericEntry> {
+        Some(NumericEntry::Value(self.current_ms))
     }
 
-    fn running_value(&self) -> NumericEntry {
-        NumericEntry::Aggregated {
+    fn running_value(&self) -> Option<NumericEntry> {
+        Some(NumericEntry::Aggregated {
             aggregated_value: if self.count > 0 {
                 self.total_ms / self.count as f64
             } else {
                 0.0
             },
             count: self.count,
-        }
+        })
+    }
+
+    fn final_value(&self) -> NumericEntry {
+        NumericEntry::Value(if self.count > 0 {
+            self.total_ms / self.count as f64
+        } else {
+            0.0
+        })
     }
 }

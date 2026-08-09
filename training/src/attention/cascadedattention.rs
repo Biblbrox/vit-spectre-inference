@@ -1,18 +1,20 @@
-use burn::{config::Config, module::Module, prelude::*, tensor::activation::softmax};
+
+use burn::{backend::Backend, config::Config, module::Module, prelude::*, tensor::activation::softmax};
 
 use crate::conv::{
     DepthwiseConvBnAct, DepthwiseConvBnActConfig, PointwiseConvBn, PointwiseConvBnConfig,
 };
 
 #[derive(Module, Debug)]
-pub struct CGAHead<B: Backend> {
-    q_proj: PointwiseConvBn<B>,
-    k_proj: PointwiseConvBn<B>,
-    v_proj: PointwiseConvBn<B>,
-    q_token_interaction: DepthwiseConvBnAct<B>,
+pub struct CGAHead {
+    q_proj: PointwiseConvBn,
+    k_proj: PointwiseConvBn,
+    v_proj: PointwiseConvBn,
+    q_token_interaction: DepthwiseConvBnAct,
     q_dim: usize,
     k_dim: usize,
     v_dim: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -26,7 +28,7 @@ pub struct CGAHeadConfig {
 }
 
 impl CGAHeadConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> CGAHead<B> {
+    pub fn init(&self, device: &Device) -> CGAHead {
         CGAHead {
             q_proj: PointwiseConvBnConfig::new(self.in_channels, self.q_dim).init(device),
             k_proj: PointwiseConvBnConfig::new(self.in_channels, self.k_dim).init(device),
@@ -42,10 +44,11 @@ impl CGAHeadConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct CascadedGroupAttention<B: Backend> {
-    heads: Vec<CGAHead<B>>,
-    proj: PointwiseConvBn<B>,
+pub struct CascadedGroupAttention {
+    heads: Vec<CGAHead>,
+    proj: PointwiseConvBn,
     num_heads: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -63,7 +66,7 @@ pub struct CascadedGroupAttentionConfig {
 }
 
 impl CascadedGroupAttentionConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> CascadedGroupAttention<B> {
+    pub fn init(&self, device: &Device) -> CascadedGroupAttention {
         assert!(self.num_heads > 0);
         assert!(self.dim.is_multiple_of(self.num_heads));
 
@@ -102,13 +105,13 @@ impl CascadedGroupAttentionConfig {
     }
 }
 
-impl<B: Backend> CascadedGroupAttention<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl CascadedGroupAttention {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let residual = x.clone();
 
         let splits = x.chunk(self.num_heads, 1);
-        let mut outputs: Vec<Tensor<B, 4>> = Vec::with_capacity(self.num_heads);
-        let mut prev_out: Option<Tensor<B, 4>> = None;
+        let mut outputs: Vec<Tensor<4>> = Vec::with_capacity(self.num_heads);
+        let mut prev_out: Option<Tensor<4>> = None;
 
         for (i, split) in splits.into_iter().enumerate() {
             let head = &self.heads[i];

@@ -1,8 +1,10 @@
 use std::{num::NonZero, sync::Arc};
 
 use burn::{
+    data::dataset::DatasetError,
     data::dataloader::{DataLoader, DataLoaderIterator, Progress},
-    tensor::backend::Backend,
+    backend::Backend,
+    tensor::Device,
 };
 use polars::lazy::{
     dsl::{Engine, len},
@@ -17,16 +19,17 @@ use crate::{
     },
 };
 
-pub struct StreamingDataLoader<B: Backend> {
+pub struct StreamingDataLoader {
     dataset: LazyFrame,
-    batcher: Arc<dyn Batcher<B>>,
+    batcher: Arc<dyn Batcher>,
     strategy: Box<dyn FrameBatchStrategy>,
-    transforms: Arc<Pipeline<B>>,
+    transforms: Arc<Pipeline>,
     total_items: usize,
-    device: B::Device,
+    device: Device,
+    
 }
 
-impl<B: Backend> Clone for StreamingDataLoader<B> {
+impl Clone for StreamingDataLoader {
     fn clone(&self) -> Self {
         Self {
             dataset: self.dataset.clone(),
@@ -39,13 +42,13 @@ impl<B: Backend> Clone for StreamingDataLoader<B> {
     }
 }
 
-impl<B: Backend> StreamingDataLoader<B> {
+impl StreamingDataLoader {
     pub fn new(
         dataset: impl Into<LazyFrame>,
-        batcher: Arc<dyn Batcher<B>>,
+        batcher: Arc<dyn Batcher>,
         strategy: Box<dyn FrameBatchStrategy>,
-        transforms: Arc<Pipeline<B>>,
-        device: B::Device,
+        transforms: Arc<Pipeline>,
+        device: Device,
     ) -> Self {
         let dataset = dataset.into();
         let total_items = dataset
@@ -71,11 +74,11 @@ impl<B: Backend> StreamingDataLoader<B> {
     }
 }
 
-impl<B> DataLoader<B, Batch<B>> for StreamingDataLoader<B>
+impl DataLoader<Batch> for StreamingDataLoader
 where
-    B: Backend,
+    
 {
-    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<Batch<B>> + 'a> {
+    fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<Batch> + 'a> {
         Box::new(StreamingDataLoaderIterator::new(
             self.dataset.clone(),
             self.batcher.clone(),
@@ -90,13 +93,13 @@ where
         self.total_items
     }
 
-    fn to_device(&self, device: &B::Device) -> Arc<dyn DataLoader<B, Batch<B>>> {
+    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<Batch>> {
         let mut loader = self.clone();
         loader.device = device.clone();
         Arc::new(loader)
     }
 
-    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<B, Batch<B>>> {
+    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<Batch>> {
         let mut loader = self.clone();
         loader.dataset = self
             .dataset
@@ -107,24 +110,25 @@ where
     }
 }
 
-pub struct StreamingDataLoaderIterator<B: Backend> {
-    batcher: Arc<dyn Batcher<B>>,
+pub struct StreamingDataLoaderIterator {
+    batcher: Arc<dyn Batcher>,
     strategy: Box<dyn FrameBatchStrategy>,
     current_batch: usize,
     items_processed: usize,
-    transforms: Arc<Pipeline<B>>,
+    transforms: Arc<Pipeline>,
     total_items: usize,
-    device: B::Device,
+    device: Device,
+    
 }
 
-impl<B: Backend> StreamingDataLoaderIterator<B> {
+impl StreamingDataLoaderIterator {
     pub fn new(
         dataset: LazyFrame,
-        batcher: Arc<dyn Batcher<B>>,
+        batcher: Arc<dyn Batcher>,
         mut strategy: Box<dyn FrameBatchStrategy>,
-        transforms: Arc<Pipeline<B>>,
+        transforms: Arc<Pipeline>,
         total_items: usize,
-        device: B::Device,
+        device: Device,
     ) -> Self {
         let stream = dataset
             .collect_batches(
@@ -148,8 +152,8 @@ impl<B: Backend> StreamingDataLoaderIterator<B> {
     }
 }
 
-impl<B: Backend> Iterator for StreamingDataLoaderIterator<B> {
-    type Item = Batch<B>;
+impl Iterator for StreamingDataLoaderIterator {
+    type Item = Result<Batch, DatasetError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.current_batch += 1;
@@ -160,15 +164,15 @@ impl<B: Backend> Iterator for StreamingDataLoaderIterator<B> {
                 .batch(df, self.transforms.clone(), &self.device);
             let batch_size = batch.targets.dims()[0];
             self.items_processed += batch_size;
-            return Some(batch);
+            return Some(Ok(batch));
         }
 
         None
     }
 }
 
-impl<B: Backend> DataLoaderIterator<Batch<B>> for StreamingDataLoaderIterator<B> {
+impl DataLoaderIterator<Batch> for StreamingDataLoaderIterator {
     fn progress(&self) -> Progress {
-        Progress::new(self.items_processed, self.total_items)
+        Progress::new(self.items_processed, self.total_items, None)
     }
 }

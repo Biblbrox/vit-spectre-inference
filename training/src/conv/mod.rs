@@ -1,3 +1,4 @@
+
 use burn::{
     Tensor,
     config::Config,
@@ -6,13 +7,15 @@ use burn::{
         BatchNorm, BatchNormConfig, PaddingConfig2d, Relu,
         conv::{Conv2d, Conv2dConfig},
     },
-    tensor::backend::Backend,
+    backend::Backend,
+    tensor::Device,
 };
 
 #[derive(Module, Debug)]
-pub struct PointwiseConvBn<B: Backend> {
-    conv: Conv2d<B>,
-    bn: BatchNorm<B>,
+pub struct PointwiseConvBn {
+    conv: Conv2d,
+    bn: BatchNorm,
+    
 }
 
 #[derive(Config, Debug)]
@@ -22,7 +25,7 @@ pub struct PointwiseConvBnConfig {
 }
 
 impl PointwiseConvBnConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> PointwiseConvBn<B> {
+    pub fn init(&self, device: &Device) -> PointwiseConvBn {
         PointwiseConvBn {
             conv: Conv2dConfig::new([self.in_channels, self.out_channels], [1, 1])
                 .with_padding(PaddingConfig2d::Same)
@@ -32,17 +35,18 @@ impl PointwiseConvBnConfig {
     }
 }
 
-impl<B: Backend> PointwiseConvBn<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl PointwiseConvBn {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         self.bn.forward(self.conv.forward(x))
     }
 }
 
 #[derive(Module, Debug)]
-pub struct DepthwiseConvBnAct<B: Backend> {
-    conv: Conv2d<B>,
-    bn: BatchNorm<B>,
+pub struct DepthwiseConvBnAct {
+    conv: Conv2d,
+    bn: BatchNorm,
     act: Relu,
+    
 }
 
 #[derive(Config, Debug)]
@@ -53,7 +57,7 @@ pub struct DepthwiseConvBnActConfig {
 }
 
 impl DepthwiseConvBnActConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DepthwiseConvBnAct<B> {
+    pub fn init(&self, device: &Device) -> DepthwiseConvBnAct {
         DepthwiseConvBnAct {
             conv: Conv2dConfig::new(
                 [self.channels, self.channels],
@@ -68,8 +72,8 @@ impl DepthwiseConvBnActConfig {
     }
 }
 
-impl<B: Backend> DepthwiseConvBnAct<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl DepthwiseConvBnAct {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let x = self.conv.forward(x);
         let x = self.bn.forward(x);
         self.act.forward(x)
@@ -77,14 +81,15 @@ impl<B: Backend> DepthwiseConvBnAct<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct ConvBNAct<B: Backend> {
-    conv: Conv2d<B>,
-    bn: BatchNorm<B>,
+pub struct ConvBNAct {
+    conv: Conv2d,
+    bn: BatchNorm,
     activation: Relu,
+    
 }
 
-impl<B: Backend> ConvBNAct<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl ConvBNAct {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let x = self.conv.forward(x);
         let x = self.bn.forward(x);
         self.activation.forward(x)
@@ -103,7 +108,7 @@ pub struct ConvBNActConfig {
 }
 
 impl ConvBNActConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> ConvBNAct<B> {
+    pub fn init(&self, device: &Device) -> ConvBNAct {
         ConvBNAct {
             conv: Conv2dConfig::new(
                 [self.in_channels, self.out_channels],
@@ -122,11 +127,12 @@ impl ConvBNActConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct MBConv<B: Backend> {
-    expand: ConvBNAct<B>,
-    depthwise: ConvBNAct<B>,
-    project: ConvBNAct<B>,
+pub struct MBConv {
+    expand: ConvBNAct,
+    depthwise: ConvBNAct,
+    project: ConvBNAct,
     use_residual: bool,
+    
 }
 
 #[derive(Config, Debug)]
@@ -140,7 +146,7 @@ pub struct MBConvConfig {
 }
 
 impl MBConvConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> MBConv<B> {
+    pub fn init(&self, device: &Device) -> MBConv {
         let hidden_dim = self.in_channels * self.expand_ratio;
 
         MBConv {
@@ -158,8 +164,8 @@ impl MBConvConfig {
     }
 }
 
-impl<B: Backend> MBConv<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl MBConv {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let residual = x.clone();
 
         let x = self.expand.forward(x);

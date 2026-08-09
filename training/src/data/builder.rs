@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use burn::{data::dataloader::DataLoader, tensor::backend::Backend};
+use burn::{data::dataloader::DataLoader, backend::Backend, tensor::Device};
 use polars::prelude::*;
 
 use crate::{
@@ -18,16 +18,17 @@ use crate::{
 #[cfg(feature = "in_memory_loader")]
 use crate::data::dataloader::inmemory::InMemoryDataLoader;
 
-pub struct StreamingDataLoaderBuilder<B: Backend> {
-    batcher: Arc<dyn Batcher<B>>,
+pub struct StreamingDataLoaderBuilder {
+    batcher: Arc<dyn Batcher>,
     strategy: Option<Box<dyn FrameBatchStrategy>>,
     mapper: Option<LazyMapper>,
-    transforms: Option<Arc<Pipeline<B>>>,
-    device: Option<B::Device>,
+    transforms: Option<Arc<Pipeline>>,
+    device: Option<Device>,
+    
 }
 
-impl<B: Backend> StreamingDataLoaderBuilder<B> {
-    pub fn new(batcher: Arc<dyn Batcher<B>>) -> Self {
+impl StreamingDataLoaderBuilder {
+    pub fn new(batcher: Arc<dyn Batcher>) -> Self {
         Self {
             batcher,
             strategy: None,
@@ -47,41 +48,42 @@ impl<B: Backend> StreamingDataLoaderBuilder<B> {
         self
     }
 
-    pub fn with_transforms(mut self, transforms: Arc<Pipeline<B>>) -> Self {
+    pub fn with_transforms(mut self, transforms: Arc<Pipeline>) -> Self {
         self.transforms = Some(transforms);
         self
     }
 
-    pub fn with_device(mut self, device: B::Device) -> Self {
+    pub fn with_device(mut self, device: Device) -> Self {
         self.device = Some(device);
         self
     }
 
-    pub fn build(self, dataset: LazyFrame) -> Arc<dyn DataLoader<B, Batch<B>>> {
+    pub fn build(self, dataset: LazyFrame) -> Arc<dyn DataLoader<Batch>> {
         Arc::new(StreamingDataLoader::new(
             dataset,
             self.batcher,
             self.strategy
                 .unwrap_or(Box::new(FixedBatchStrategy::new(1))),
             self.transforms
-                .unwrap_or(Arc::new(Pipeline::<B>::default())),
+                .unwrap_or(Arc::new(Pipeline::default())),
             self.device.unwrap_or_default(),
         ))
     }
 }
 
 #[cfg(feature = "in_memory_loader")]
-pub struct InMemoryDataLoaderBuilder<B: Backend> {
-    batcher: Arc<dyn Batcher<B>>,
-    transforms: Option<Arc<Pipeline<B>>>,
+pub struct InMemoryDataLoaderBuilder {
+    batcher: Arc<dyn Batcher>,
+    transforms: Option<Arc<Pipeline>>,
     batch_size: Option<usize>,
     num_workers: Option<usize>,
-    device: Option<B::Device>,
+    device: Option<Device>,
+    
 }
 
 #[cfg(feature = "in_memory_loader")]
-impl<B: Backend> InMemoryDataLoaderBuilder<B> {
-    pub fn new(batcher: Arc<dyn Batcher<B>>) -> Self {
+impl InMemoryDataLoaderBuilder {
+    pub fn new(batcher: Arc<dyn Batcher>) -> Self {
         Self {
             batcher,
             transforms: None,
@@ -91,12 +93,12 @@ impl<B: Backend> InMemoryDataLoaderBuilder<B> {
         }
     }
 
-    pub fn with_transforms(mut self, transforms: Arc<Pipeline<B>>) -> Self {
+    pub fn with_transforms(mut self, transforms: Arc<Pipeline>) -> Self {
         self.transforms = Some(transforms);
         self
     }
 
-    pub fn with_device(mut self, device: B::Device) -> Self {
+    pub fn with_device(mut self, device: Device) -> Self {
         self.device = Some(device);
         self
     }
@@ -111,12 +113,12 @@ impl<B: Backend> InMemoryDataLoaderBuilder<B> {
         self
     }
 
-    pub fn build(self, dataset: LazyFrame) -> Arc<dyn DataLoader<B, Batch<B>>> {
+    pub fn build(self, dataset: LazyFrame) -> Arc<dyn DataLoader<Batch>> {
         Arc::new(InMemoryDataLoader::new(
             dataset,
             self.batcher,
             self.transforms
-                .unwrap_or(Arc::new(Pipeline::<B>::default())),
+                .unwrap_or(Arc::new(Pipeline::default())),
             self.batch_size.unwrap_or(1),
             self.num_workers.unwrap_or(0),
             self.device.unwrap_or_default(),

@@ -1,9 +1,11 @@
+
 use burn::{
+    backend::Backend,
     config::Config,
     module::Module,
     nn::{Linear, LinearConfig},
-    prelude::Tensor,
-    tensor::{activation::softmax, backend::Backend},
+    prelude::{Device, Tensor},
+    tensor::activation::softmax,
 };
 
 #[derive(Config, Debug)]
@@ -13,18 +15,19 @@ pub struct SelfAttentionConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct SelfAttention<B: Backend> {
-    q_proj: Linear<B>,
-    k_proj: Linear<B>,
-    v_proj: Linear<B>,
-    out_proj: Linear<B>,
+pub struct SelfAttention {
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    out_proj: Linear,
     n_heads: usize,
     d_head: usize,
     scale: f32,
+    
 }
 
-impl<B: Backend> SelfAttention<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl SelfAttention {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let (scores, v) = self.scores(x);
 
         let scores = softmax(scores, 3);
@@ -32,7 +35,7 @@ impl<B: Backend> SelfAttention<B> {
         self.apply_output(scores, v)
     }
 
-    pub fn scores(&self, x: Tensor<B, 3>) -> (Tensor<B, 4>, Tensor<B, 4>) {
+    pub fn scores(&self, x: Tensor<3>) -> (Tensor<4>, Tensor<4>) {
         let [batch, seq, _] = x.dims();
         let (h, d) = (self.n_heads, self.d_head);
 
@@ -47,7 +50,7 @@ impl<B: Backend> SelfAttention<B> {
         (q.matmul(k.transpose()) / self.scale, v)
     }
 
-    pub fn apply_output(&self, scores: Tensor<B, 4>, v: Tensor<B, 4>) -> Tensor<B, 3> {
+    pub fn apply_output(&self, scores: Tensor<4>, v: Tensor<4>) -> Tensor<3> {
         let [batch, _, seq, _] = scores.dims();
         let (h, d) = (self.n_heads, self.d_head);
 
@@ -58,7 +61,7 @@ impl<B: Backend> SelfAttention<B> {
 }
 
 impl SelfAttentionConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SelfAttention<B> {
+    pub fn init(&self, device: &Device) -> SelfAttention {
         assert!(
             self.d_model % self.n_heads == 0,
             "d_model ({}) must be divisible by n_heads ({})",

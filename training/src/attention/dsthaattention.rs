@@ -2,8 +2,7 @@ use burn::{
     config::Config,
     module::{Module, Param},
     nn::{Linear, LinearConfig},
-    prelude::Tensor,
-    tensor::backend::Backend,
+    prelude::{Device, Tensor},
 };
 
 #[derive(Config, Debug)]
@@ -21,21 +20,21 @@ pub struct DSTHAConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct DSTHA<B: Backend> {
-    q_proj: Linear<B>,
-    k_proj: Linear<B>,
-    v_proj: Linear<B>,
-    out_proj: Linear<B>,
-    delta_proj: Linear<B>,
-    raw_gamma: Param<Tensor<B, 1>>,
-    raw_m: Param<Tensor<B, 1>>,
+pub struct DSTHA {
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    out_proj: Linear,
+    delta_proj: Linear,
+    raw_gamma: Param<Tensor<1>>,
+    raw_m: Param<Tensor<1>>,
     n_heads: usize,
     d_head: usize,
     sinkhorn_iters: usize,
     epsilon: f32,
 }
 
-fn softplus<B: Backend, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D> {
+fn softplus<const D: usize>(x: Tensor<D>) -> Tensor<D> {
     let abs_x = x.clone().abs();
     let max_x0 = (x + abs_x.clone()) / 2.0; // max(x,0), via (x+|x|)/2
     let log_term = (abs_x * -1.0).exp() + 1.0; // 1 + exp(-|x|), always in (1,2]
@@ -46,22 +45,16 @@ fn inv_softplus_init(target: f32, eps: f32) -> f32 {
     ((target - eps).exp() - 1.0).ln()
 }
 
-impl<B: Backend> DSTHA<B> {
-    fn m(&self) -> Tensor<B, 1> {
+impl DSTHA {
+    fn m(&self) -> Tensor<1> {
         softplus(self.raw_m.val()) + 1e-4
     }
 
-    fn gamma(&self) -> Tensor<B, 1> {
+    fn gamma(&self) -> Tensor<1> {
         softplus(self.raw_gamma.val()) + 1e-4
     }
 
-    fn phi(
-        &self,
-        x: Tensor<B, 4>,
-        scale_b: Tensor<B, 4>,
-        gamma_b: Tensor<B, 4>,
-        m: Tensor<B, 1>,
-    ) -> Tensor<B, 4> {
+    fn phi(&self, x: Tensor<4>, scale_b: Tensor<4>, gamma_b: Tensor<4>, m: Tensor<1>) -> Tensor<4> {
         let [batch, heads, seq, d] = x.dims();
         let device = x.device();
 
@@ -79,7 +72,7 @@ impl<B: Backend> DSTHA<B> {
 
         let psi = delta * psi_raw / psi_norm; // psi_hat(x), broadcasts over d
 
-        let gamma_term = Tensor::<B, 4>::ones([batch, heads, seq, 1], &device) * gamma_b;
+        let gamma_term = Tensor::<4>::ones([batch, heads, seq, 1], &device) * gamma_b;
         let feat = Tensor::cat(vec![psi, gamma_term], 3); // [psi_hat(x); gamma]
 
         feat * scale_b // scale by sqrt(e^alpha/2)
@@ -87,12 +80,12 @@ impl<B: Backend> DSTHA<B> {
 
     /// phi_q, phi_k: [batch, heads, seq, d_head+1]
     /// returns (u, w): each [batch, heads, seq, 1]
-    fn sinkhorn(&self, phi_q: Tensor<B, 4>, phi_k: Tensor<B, 4>) -> (Tensor<B, 4>, Tensor<B, 4>) {
+    fn sinkhorn(&self, phi_q: Tensor<4>, phi_k: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
         let [batch, heads, seq, _] = phi_q.dims();
         let device = phi_q.device();
 
-        let mut u = Tensor::<B, 4>::ones([batch, heads, seq, 1], &device);
-        let mut w = Tensor::<B, 4>::ones([batch, heads, seq, 1], &device);
+        let mut u = Tensor::<4>::ones([batch, heads, seq, 1], &device);
+        let mut w = Tensor::<4>::ones([batch, heads, seq, 1], &device);
 
         let phi_q_t = phi_q.clone().transpose(); // [batch, heads, d+1, seq]
         let phi_k_t = phi_k.clone().transpose();
@@ -116,7 +109,7 @@ impl<B: Backend> DSTHA<B> {
         (u, w)
     }
 
-    fn project_and_featurize(&self, x: Tensor<B, 3>) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    fn project_and_featurize(&self, x: Tensor<3>) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let [batch, seq, _] = x.dims();
         let (h, d) = (self.n_heads, self.d_head);
 
@@ -143,12 +136,7 @@ impl<B: Backend> DSTHA<B> {
         )
     }
 
-    fn apply_output(
-        &self,
-        phi_q: Tensor<B, 4>,
-        phi_k: Tensor<B, 4>,
-        v: Tensor<B, 4>,
-    ) -> Tensor<B, 3> {
+    fn apply_output(&self, phi_q: Tensor<4>, phi_k: Tensor<4>, v: Tensor<4>) -> Tensor<3> {
         let [batch, h, seq, _] = v.dims();
         let d = self.d_head;
 
@@ -159,7 +147,7 @@ impl<B: Backend> DSTHA<B> {
         self.out_proj.forward(out)
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let (phi_q, phi_k, v) = self.project_and_featurize(x);
         let (u, w) = self.sinkhorn(phi_q.clone(), phi_k.clone());
 
@@ -170,7 +158,7 @@ impl<B: Backend> DSTHA<B> {
     }
 
     /// L_DS = ||r-1||^2 + ||c-1||^2.
-    pub fn marginals(&self, x: Tensor<B, 3>) -> (Tensor<B, 4>, Tensor<B, 4>) {
+    pub fn marginals(&self, x: Tensor<3>) -> (Tensor<4>, Tensor<4>) {
         let (phi_q, phi_k, _v) = self.project_and_featurize(x);
         let (u, w) = self.sinkhorn(phi_q.clone(), phi_k.clone());
 
@@ -188,7 +176,7 @@ impl<B: Backend> DSTHA<B> {
 }
 
 impl DSTHAConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DSTHA<B> {
+    pub fn init(&self, device: &Device) -> DSTHA {
         assert!(
             self.d_model % self.n_heads == 0,
             "d_model ({}) must be divisible by n_heads ({})",
@@ -205,10 +193,10 @@ impl DSTHAConfig {
         let eps_m = 1e-4_f32;
         let raw0 = ((m0 - eps_m).exp() - 1.0).ln();
 
-        let raw_m = Tensor::<B, 1>::full([self.n_heads], raw0, device);
+        let raw_m = Tensor::<1>::full([self.n_heads], raw0, device);
 
         let raw_gamma0 = inv_softplus_init(self.init_gamma.max(1e-3), eps_m);
-        let raw_gamma = Tensor::<B, 1>::full([self.n_heads], raw_gamma0, device);
+        let raw_gamma = Tensor::<1>::full([self.n_heads], raw_gamma0, device);
 
         let init_logits = || LinearConfig::new(self.d_model, self.d_model).init(device);
         DSTHA {
@@ -239,9 +227,9 @@ mod tests {
     fn forward_runs_and_marginals_converge_to_one() {
         let device = Default::default();
         let config = DSTHAConfig::new(16, 4).with_sinkhorn_iters(10);
-        let model = config.init::<B>(&device);
+        let model = config.init(&device);
 
-        let x = Tensor::<B, 3>::random([2, 20, 16], Distribution::Normal(0.0, 1.0), &device);
+        let x = Tensor::<3>::random([2, 20, 16], Distribution::Normal(0.0, 1.0), &device);
 
         let out = model.forward(x.clone());
         assert_eq!(out.dims(), [2, 20, 16]);

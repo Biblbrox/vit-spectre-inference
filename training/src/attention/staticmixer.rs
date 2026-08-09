@@ -1,8 +1,10 @@
+
 use burn::{
+    backend::Backend,
     config::Config,
     module::Module,
-    prelude::Tensor,
-    tensor::{Distribution, Int, TensorData, backend::Backend},
+    prelude::{Device, Tensor},
+    tensor::{Distribution, Int, TensorData},
 };
 /// Permuter implementation with indicies
 ///
@@ -10,11 +12,12 @@ use burn::{
 /// * `perms`: [TODO:parameter]
 /// * `num_heads`: [TODO:parameter]
 #[derive(Module, Debug)]
-pub struct StaticMixer<B: Backend> {
-    signs: Tensor<B, 3>,
-    perms: Tensor<B, 1, Int>,
+pub struct StaticMixer {
+    signs: Tensor<3>,
+    perms: Tensor<1, Int>,
     num_heads: usize,
-    perm_matrix: Tensor<B, 3>,
+    perm_matrix: Tensor<3>,
+    
 }
 
 #[derive(Config, Debug)]
@@ -31,8 +34,8 @@ pub struct StaticMixerConfig {
     strategy: PermutationStrategy,
 }
 
-impl<B: Backend> StaticMixer<B> {
-    pub fn forward_hard(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl StaticMixer {
+    pub fn forward_hard(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let h = self.num_heads;
         // [H * N, E]
@@ -47,7 +50,7 @@ impl<B: Backend> StaticMixer<B> {
         (x * signs).reshape([b, n, e])
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let h = self.num_heads;
 
@@ -61,17 +64,17 @@ impl<B: Backend> StaticMixer<B> {
 }
 
 impl StaticMixerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StaticMixer<B> {
+    pub fn init(&self, device: &Device) -> StaticMixer {
         let distribution = Distribution::Uniform(-1.0, 1.0);
         let d = self.seq_length;
         let hn = self.num_heads * d;
 
-        let mut sign_per_head = Vec::<Tensor<B, 2>>::new();
-        let mut perms_per_head = Vec::<Tensor<B, 1, Int>>::new();
+        let mut sign_per_head = Vec::<Tensor<2>>::new();
+        let mut perms_per_head = Vec::<Tensor<1, Int>>::new();
         (0..self.num_heads).for_each(|h| {
-            let perm: Tensor<B, 1, Int> = match self.strategy {
+            let perm: Tensor<1, Int> = match self.strategy {
                 PermutationStrategy::Random => {
-                    Tensor::<B, 1>::random([d], Distribution::Uniform(0.0, 1.0), device).argsort(0)
+                    Tensor::<1>::random([d], Distribution::Uniform(0.0, 1.0), device).argsort(0)
                 }
                 PermutationStrategy::Xor => Tensor::from_data(
                     TensorData::new((0..d).map(|x| (x ^ (h + 1)) as i32).collect(), [d]),
@@ -81,17 +84,17 @@ impl StaticMixerConfig {
 
             perms_per_head.push(perm);
             sign_per_head.push(
-                Tensor::<B, 2>::random([d, self.embed_dim / self.num_heads], distribution, device)
+                Tensor::<2>::random([d, self.embed_dim / self.num_heads], distribution, device)
                     .sign(),
             )
         });
         let perms = Tensor::cat(perms_per_head, 0);
         let signs = Tensor::cat(sign_per_head, 0).unsqueeze();
 
-        let perm_matrix = Tensor::<B, 2>::zeros([hn, hn], device).scatter(
+        let perm_matrix = Tensor::<2>::zeros([hn, hn], device).scatter(
             1,
             perms.clone().reshape([hn, 1]),
-            Tensor::<B, 2>::ones([hn, 1], device),
+            Tensor::<2>::ones([hn, 1], device),
             burn::tensor::IndexingUpdateOp::Add,
         ); // [H*N, H*N]
 

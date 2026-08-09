@@ -1,6 +1,8 @@
 use burn::{
+    backend::Backend,
+    module::{AutodiffModule, Module, ModuleDisplay, ModuleDisplayDefault},
+    tensor::Device,
     Tensor,
-    tensor::{TensorPrimitive, backend::Backend, ops::FloatTensor},
 };
 
 pub mod cascadedattention;
@@ -22,35 +24,52 @@ pub enum NormalizationMode {
     Double,
 }
 
-pub fn sinkhorn<B: Backend, const D: usize>(
-    s: Tensor<B, D>,
-    temp: f32,
-    mode: NormalizationMode,
-) -> Tensor<B, D> {
-    assert!(D >= 2, "sinkhorn requires at least 2 dimensions");
-    let (last, second_last) = (D - 1, D - 2);
-    Tensor::from_primitive(TensorPrimitive::Float(match mode {
-        NormalizationMode::Double => {
-            sinkhorn_double::<B>(s.into_primitive().tensor(), temp, last, second_last)
-        }
-        NormalizationMode::Single => {
-            sinkhorn_single::<B>(s.into_primitive().tensor(), temp, second_last)
-        }
-    }))
+impl Module for NormalizationMode {
+    fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
+    fn to_device(self, _: &Device) -> Self { self }
+    fn fork(self, _: &Device) -> Self { self }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
 }
 
-fn calc_qkv_soft<B: Backend>(
+impl AutodiffModule for NormalizationMode {
+    fn valid(&self) -> Self { *self }
+    fn from_inner(module: Self) -> Self { module }
+}
+
+impl ModuleDisplayDefault for NormalizationMode {
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+}
+
+impl ModuleDisplay for NormalizationMode {}
+
+pub fn sinkhorn< const D: usize>(
+    s: Tensor<D>,
+    temp: f32,
+    mode: NormalizationMode,
+) -> Tensor<D> {
+    assert!(D >= 2, "sinkhorn requires at least 2 dimensions");
+    let last = D - 1;
+    let second_last = D - 2;
+    
+    match mode {
+        NormalizationMode::Double => sinkhorn_double_generic(s, temp, last, second_last),
+        NormalizationMode::Single => sinkhorn_single_generic(s, temp, last),
+    }
+}
+
+fn calc_qkv_soft(
     temperature: f32,
     stoch_mode: StochasticSelect,
     norm_mode: NormalizationMode,
-    q: Tensor<B, 4>,
-    k: Tensor<B, 4>,
-    v: Tensor<B, 4>,
-) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    q: Tensor<4>,
+    k: Tensor<4>,
+    v: Tensor<4>,
+) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
     let (do_q, do_k, do_v) = stoch_mode.flags();
     let t = temperature;
 
-    let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+    let apply = |do_it: bool, mat: Tensor<4>| -> Tensor<4> {
         if do_it {
             sinkhorn(mat, t, norm_mode)
         } else {
@@ -61,18 +80,18 @@ fn calc_qkv_soft<B: Backend>(
     (apply(do_q, q), apply(do_k, k), apply(do_v, v))
 }
 
-fn calc_qkv_hard<B: Backend>(
-    x: Tensor<B, 4>,
+fn calc_qkv_hard(
+    x: Tensor<4>,
     stoch_mode: StochasticSelect,
-    q: Tensor<B, 4>,
-    k: Tensor<B, 4>,
-    v: Tensor<B, 4>,
-) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    q: Tensor<4>,
+    k: Tensor<4>,
+    v: Tensor<4>,
+) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
     let dk = x.dims()[3];
     let (do_q, do_k, do_v) = stoch_mode.flags();
 
     // Either select the argmax "hard" index along dk, or apply the matrix as a linear map.
-    let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+    let apply = |do_it: bool, mat: Tensor<4>| -> Tensor<4> {
         if do_it {
             x.clone().select(3, mat.argmax(2).reshape([dk]))
         } else {
@@ -83,53 +102,55 @@ fn calc_qkv_hard<B: Backend>(
     (apply(do_q, q), apply(do_k, k), apply(do_v, v))
 }
 
-pub fn sinkhorn_iter<B: Backend, const D: usize>(
-    s: Tensor<B, D>,
+pub fn sinkhorn_iter< const D: usize>(
+    s: Tensor<D>,
     temp: f32,
     iters: usize,
     mode: NormalizationMode,
-) -> Tensor<B, D> {
+) -> Tensor<D> {
     assert!(D >= 2, "sinkhorn requires at least 2 dimensions");
-    let (last, second_last) = (D - 1, D - 2);
-    let mut prim = s.into_primitive().tensor();
+    let last = D - 1;
+    let second_last = D - 2;
+    
+    let mut result = s.clone();
     for _i in 0..iters {
-        prim = match mode {
-            NormalizationMode::Double => sinkhorn_double::<B>(prim, temp, last, second_last),
-            NormalizationMode::Single => sinkhorn_single::<B>(prim, temp, last),
-        }
+        result = match mode {
+            NormalizationMode::Double => sinkhorn_double_generic(result.clone(), temp, last, second_last),
+            NormalizationMode::Single => sinkhorn_single_generic(result.clone(), temp, last),
+        };
     }
-    Tensor::from_primitive(TensorPrimitive::Float(prim))
+    result
 }
 
-/// produces a doubly-stochastic matrix over (second_last, last)
-fn sinkhorn_double<B: Backend>(
-    tensor: FloatTensor<B>,
+/// Generic sinkhorn double normalization using high-level tensor ops
+fn sinkhorn_double_generic<const D: usize>(
+    tensor: Tensor<D>,
     temp: f32,
     last: usize,
     second_last: usize,
-) -> FloatTensor<B> {
-    let tensor = B::float_div_scalar(tensor, burn::tensor::Scalar::Float(temp as f64));
-    let max = B::float_max_dim(B::float_detach(tensor.clone()), last);
-    let shifted = B::float_sub(tensor, max);
-    let exp = B::float_exp(shifted);
-    let sum = B::float_sum_dim(exp.clone(), last);
-    let tensor = B::float_div(exp, sum);
+) -> Tensor<D> {
+    let tensor = tensor / temp;
+    let max = tensor.clone().max_dim(last);
+    let shifted = tensor - max;
+    let exp = shifted.exp();
+    let sum = exp.clone().sum_dim(last);
+    let tensor = exp / sum;
 
-    let max = B::float_max_dim(B::float_detach(tensor.clone()), second_last);
-    let shifted = B::float_sub(tensor, max);
-    let exp = B::float_exp(shifted);
-    let sum = B::float_sum_dim(exp.clone(), second_last);
-    B::float_div(exp, sum)
+    let max = tensor.clone().max_dim(second_last);
+    let shifted = tensor - max;
+    let exp = shifted.exp();
+    let sum = exp.clone().sum_dim(second_last);
+    exp / sum
 }
 
-/// produces a row-stochastic matrix over `last`
-fn sinkhorn_single<B: Backend>(tensor: FloatTensor<B>, temp: f32, last: usize) -> FloatTensor<B> {
-    let tensor = B::float_div_scalar(tensor, burn::tensor::Scalar::Float(temp as f64));
-    let max = B::float_max_dim(B::float_detach(tensor.clone()), last);
-    let shifted = B::float_sub(tensor, max);
-    let exp = B::float_exp(shifted);
-    let sum = B::float_sum_dim(exp.clone(), last);
-    B::float_div(exp, sum)
+/// Generic sinkhorn single normalization using high-level tensor ops  
+fn sinkhorn_single_generic<const D: usize>(tensor: Tensor<D>, temp: f32, last: usize) -> Tensor<D> {
+    let tensor = tensor / temp;
+    let max = tensor.clone().max_dim(last);
+    let shifted = tensor - max;
+    let exp = shifted.exp();
+    let sum = exp.clone().sum_dim(last);
+    exp / sum
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -141,6 +162,25 @@ pub enum StochasticSelect {
     Qkv,
     None,
 }
+
+impl Module for StochasticSelect {
+    fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
+    fn to_device(self, _: &Device) -> Self { self }
+    fn fork(self, _: &Device) -> Self { self }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+}
+
+impl AutodiffModule for StochasticSelect {
+    fn valid(&self) -> Self { *self }
+    fn from_inner(module: Self) -> Self { module }
+}
+
+impl ModuleDisplayDefault for StochasticSelect {
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+}
+
+impl ModuleDisplay for StochasticSelect {}
 
 impl StochasticSelect {
     /// (apply to q, apply to k, apply to v)
@@ -163,6 +203,25 @@ pub enum StochasticMul {
     None,
 }
 
+impl Module for StochasticMul {
+    fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
+    fn to_device(self, _: &Device) -> Self { self }
+    fn fork(self, _: &Device) -> Self { self }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+}
+
+impl AutodiffModule for StochasticMul {
+    fn valid(&self) -> Self { *self }
+    fn from_inner(module: Self) -> Self { module }
+}
+
+impl ModuleDisplayDefault for StochasticMul {
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+}
+
+impl ModuleDisplay for StochasticMul {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum TrainingMode {
     Soft,
@@ -170,6 +229,25 @@ pub enum TrainingMode {
     #[default]
     Hard,
 }
+
+impl Module for TrainingMode {
+    fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
+    fn to_device(self, _: &Device) -> Self { self }
+    fn fork(self, _: &Device) -> Self { self }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+}
+
+impl AutodiffModule for TrainingMode {
+    fn valid(&self) -> Self { *self }
+    fn from_inner(module: Self) -> Self { module }
+}
+
+impl ModuleDisplayDefault for TrainingMode {
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+}
+
+impl ModuleDisplay for TrainingMode {}
 
 #[cfg(test)]
 mod tests {
@@ -287,9 +365,9 @@ mod tests {
         mat
     }
 
-    fn make_tensor_4d(data: &[f32], shape: &[usize]) -> Tensor<B, 4> {
+    fn make_tensor_4d(data: &[f32], shape: &[usize]) -> Tensor<4> {
         let device = Device::default();
-        Tensor::<B, 4>::from_data(TensorData::new(data.to_vec(), shape.to_vec()), &device)
+        Tensor::<4>::from_data(TensorData::new(data.to_vec(), shape.to_vec()), &device)
     }
 
     /// Flat index for tensor layout [batch, heads, rows, cols]
@@ -306,7 +384,7 @@ mod tests {
     }
 
     /// Extract tensor data as owned Vec<f32> (avoids lifetime issues with .to_data())
-    fn to_vec(output: &Tensor<B, 4>) -> Vec<f32> {
+    fn to_vec(output: &Tensor<4>) -> Vec<f32> {
         output.to_data().as_slice::<f32>().unwrap().to_vec()
     }
 
@@ -339,7 +417,7 @@ mod tests {
     }
 
     /// Assert that high-contrast input produces a more peaked distribution than low-contrast.
-    fn assert_more_peaked(high: &Tensor<B, 4>, low: &Tensor<B, 4>) {
+    fn assert_more_peaked(high: &Tensor<4>, low: &Tensor<4>) {
         let h = to_vec(high);
         let l = to_vec(low);
         let max_h: f32 = h.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -357,7 +435,7 @@ mod tests {
     #[test]
     fn test_sinkhorn_double_stochastic() {
         let device = Device::default();
-        let input = Tensor::<B, 4>::from_floats([[[[1.0, 2.0], [3.0, 4.0]]]], &device);
+        let input = Tensor::<4>::from_floats([[[[1.0, 2.0], [3.0, 4.0]]]], &device);
         let output = super::sinkhorn(input, 1.0, NormalizationMode::Double);
         let d = to_vec(&output);
 
@@ -471,8 +549,8 @@ mod tests {
     fn test_sinkhorn_high_contrast_input() {
         // High-contrast input should produce more peaked distribution
         let device = Device::default();
-        let high_contrast = Tensor::<B, 4>::from_floats([[[[10.0, 0.1], [0.1, 10.0]]]], &device);
-        let low_contrast = Tensor::<B, 4>::from_floats([[[[1.0, 0.9], [0.9, 1.0]]]], &device);
+        let high_contrast = Tensor::<4>::from_floats([[[[10.0, 0.1], [0.1, 10.0]]]], &device);
+        let low_contrast = Tensor::<4>::from_floats([[[[1.0, 0.9], [0.9, 1.0]]]], &device);
 
         assert_more_peaked(&high_contrast, &low_contrast);
     }

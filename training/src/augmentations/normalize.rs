@@ -1,33 +1,37 @@
+
 use burn::{
+    backend::Backend,
     Tensor,
-    tensor::{TensorData, backend::Backend},
+    
+tensor::{Device, TensorData},
 };
 
 use crate::augmentations::Augmentation;
 
 #[derive(Clone)]
-pub struct Normalize<B: Backend> {
-    mean: Tensor<B, 4>,
-    std: Tensor<B, 4>,
+pub struct Normalize {
+    mean: Tensor<4>,
+    std: Tensor<4>,
+    
 }
 
-impl<B: Backend> Normalize<B> {
-    pub fn new(std: Vec<f32>, mean: Vec<f32>, device: &B::Device) -> Normalize<B> {
+impl Normalize {
+    pub fn new(std: Vec<f32>, mean: Vec<f32>, device: &Device) -> Normalize {
         let std_data = TensorData::new(std.clone(), [std.len()]);
         let mean_data = TensorData::new(mean.clone(), [mean.len()]);
 
         Normalize {
-            std: Tensor::<B, 1>::from_data(std_data, device).reshape([1, std.len(), 1, 1]),
-            mean: Tensor::<B, 1>::from_data(mean_data, device).reshape([1, mean.len(), 1, 1]),
+            std: Tensor::<1>::from_data(std_data, device).reshape([1, std.len(), 1, 1]),
+            mean: Tensor::<1>::from_data(mean_data, device).reshape([1, mean.len(), 1, 1]),
         }
     }
 }
 
-impl<B: Backend> Augmentation<B> for Normalize<B> {
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+impl Augmentation for Normalize {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         let shape = input.shape();
-        let mean: Tensor<B, 4> = self.mean.clone().expand(shape.clone());
-        let std: Tensor<B, 4> = self.std.clone().expand(shape);
+        let mean: Tensor<4> = self.mean.clone().expand(shape.clone());
+        let std: Tensor<4> = self.std.clone().expand(shape);
         input.sub(mean).div(std)
     }
 }
@@ -37,7 +41,7 @@ mod tests {
     use burn::{
         Tensor,
         backend::{Flex, flex::FlexDevice},
-        tensor::{Shape, TensorData, Tolerance},
+        Shape, TensorData, Tolerance,
     };
 
     use crate::augmentations::{Augmentation, normalize::Normalize};
@@ -50,9 +54,9 @@ mod tests {
         // This test documents behavior with zero std
         // Depending on your requirements, you might want to add validation
         let device = Device::default();
-        let normalize = Normalize::<B>::new(vec![0.0], vec![0.0], &device);
+        let normalize = Normalize::new(vec![0.0], vec![0.0], &device);
 
-        let input = Tensor::<B, 4>::ones([1, 1, 2, 2], &device);
+        let input = Tensor::<4>::ones([1, 1, 2, 2], &device);
 
         // This will produce infinity values - might want to handle this case
         let output = normalize.execute(input);
@@ -65,9 +69,9 @@ mod tests {
     fn test_normalize_single_channel_simple_case() {
         let device = Device::default();
         // Normalize: (x - 1) / 2
-        let normalize = Normalize::<B>::new(vec![2.0], vec![1.0], &device);
+        let normalize = Normalize::new(vec![2.0], vec![1.0], &device);
 
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(vec![1.0f32, 3.0, 5.0, 7.0], [1, 1, 2, 2]),
             &device,
         );
@@ -75,7 +79,7 @@ mod tests {
         let output = normalize.execute(input);
 
         // (1-1)/2=0, (3-1)/2=1, (5-1)/2=2, (7-1)/2=3
-        let expected = Tensor::<B, 4>::from_data(
+        let expected = Tensor::<4>::from_data(
             TensorData::new(vec![0.0f32, 1.0, 2.0, 3.0], [1, 1, 2, 2]),
             &device,
         );

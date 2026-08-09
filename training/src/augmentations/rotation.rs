@@ -1,10 +1,9 @@
 use core::{f32, f64};
-use std::marker::PhantomData;
 
 use burn::{
+    backend::Backend,
     Tensor,
     tensor::{
-        backend::Backend,
         grid::affine_grid_2d,
         ops::{GridSampleOptions, GridSamplePaddingMode, InterpolateMode},
     },
@@ -31,9 +30,9 @@ impl Transform2D {
     /// # Returns
     ///
     /// A tensor with the same as the input
-    pub fn transform<B: Backend>(self, img: Tensor<B, 4>) -> Tensor<B, 4> {
+    pub fn transform(self, img: Tensor<4>) -> Tensor<4> {
         let [batch_size, channels, height, width] = img.shape().dims();
-        let transform = Tensor::<B, 2>::from(self.transform);
+        let transform = Tensor::<2>::from(self.transform);
         let transform = transform.reshape([1, 2, 3]).expand([batch_size, 2, 3]);
         let grid = affine_grid_2d(transform, [batch_size, channels, height, width]);
 
@@ -141,31 +140,31 @@ impl Transform2D {
 }
 
 #[derive(Debug, Clone)]
-pub struct RandomAffine<B: Backend> {
+pub struct RandomAffine {
     p: f64,
     degrees: f32,
-    ph: PhantomData<B>,
+    
+    
 }
 
-impl<B: Backend> RandomAffine<B> {
-    pub fn new(p: f64, degrees: f32) -> RandomAffine<B> {
+impl RandomAffine {
+    pub fn new(p: f64, degrees: f32) -> RandomAffine {
         RandomAffine {
             p,
             degrees,
-            ph: PhantomData,
         }
     }
 }
 
-impl<B: Backend> Augmentation<B> for RandomAffine<B> {
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+impl Augmentation for RandomAffine {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         if fastrand::Rng::new().f64() < self.p {
             let [_, _, h, w] = input.dims();
             let cx = (w as f32 - 1.0) * 0.5;
             let cy = (h as f32 - 1.0) * 0.5;
 
             let rot_mat = Transform2D::rotation(self.degrees.to_radians(), cx, cy);
-            return rot_mat.transform::<B>(input);
+            return rot_mat.transform(input);
         }
 
         input
@@ -179,24 +178,24 @@ pub enum Orientation {
 }
 
 #[derive(Debug, Clone)]
-pub struct RandomFlip<B: Backend> {
+pub struct RandomFlip {
     p: f64,
     orientation: Orientation,
-    ph: PhantomData<B>,
+    
+    
 }
 
-impl<B: Backend> RandomFlip<B> {
-    pub fn new(p: f64, orientation: Orientation) -> RandomFlip<B> {
+impl RandomFlip {
+    pub fn new(p: f64, orientation: Orientation) -> RandomFlip {
         RandomFlip {
             p,
             orientation,
-            ph: PhantomData,
         }
     }
 }
 
-impl<B: Backend> Augmentation<B> for RandomFlip<B> {
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+impl Augmentation for RandomFlip {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         if fastrand::Rng::new().f64() < self.p {
             return match self.orientation {
                 Orientation::Vertical => input.flip([2]),
@@ -224,8 +223,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_creation() {
-        let flip_h = RandomFlip::<B>::new(0.5, Orientation::Horizontal);
-        let flip_v = RandomFlip::<B>::new(0.5, Orientation::Vertical);
+        let flip_h = RandomFlip::new(0.5, Orientation::Horizontal);
+        let flip_v = RandomFlip::new(0.5, Orientation::Vertical);
 
         assert_eq!(flip_h.orientation, Orientation::Horizontal);
         assert_eq!(flip_v.orientation, Orientation::Vertical);
@@ -233,8 +232,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_horizontal_preserves_shape() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let flip = RandomFlip::new(1.0, Orientation::Horizontal);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 3]));
@@ -243,8 +242,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_vertical_preserves_shape() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Vertical);
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let flip = RandomFlip::new(1.0, Orientation::Vertical);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 3]));
@@ -253,8 +252,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_probability_one_always_preserves_shape() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<B, 4>::from([[[[1., 2.], [3., 4.]]]]);
+        let flip = RandomFlip::new(1.0, Orientation::Horizontal);
+        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), input.shape());
@@ -262,8 +261,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_with_batch_images() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<B, 4>::from([
+        let flip = RandomFlip::new(1.0, Orientation::Horizontal);
+        let input = Tensor::<4>::from([
             [
                 [[1., 2.], [3., 4.]],
                 [[5., 6.], [7., 8.]],
@@ -286,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_random_affine_creation() {
-        let affine = RandomAffine::<B>::new(0.5, 30.0);
+        let affine = RandomAffine::new(0.5, 30.0);
 
         assert_eq!(affine.p, 0.5);
         assert_eq!(affine.degrees, 30.0);
@@ -294,8 +293,8 @@ mod tests {
 
     #[test]
     fn test_random_affine_preserves_shape() {
-        let affine = RandomAffine::<B>::new(1.0, 30.0);
-        let input = Tensor::<B, 4>::from([[[[1., 2.], [3., 4.]]]]);
+        let affine = RandomAffine::new(1.0, 30.0);
+        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
 
         let output = affine.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 2]));
@@ -304,8 +303,8 @@ mod tests {
 
     #[test]
     fn test_random_affine_with_batch() {
-        let affine = RandomAffine::<B>::new(1.0, 45.0);
-        let input = Tensor::<B, 4>::from([[[[1., 2.], [3., 4.]]], [[[5., 6.], [7., 8.]]]]);
+        let affine = RandomAffine::new(1.0, 45.0);
+        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]], [[[5., 6.], [7., 8.]]]]);
 
         let output = affine.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([2, 1, 2, 2]));
@@ -315,8 +314,8 @@ mod tests {
     fn test_random_affine_large_batch() {
         let device = Device::default();
 
-        let affine = RandomAffine::<B>::new(1.0, 30.0);
-        let input = Tensor::<B, 4>::zeros([128, 3, 32, 32], &device);
+        let affine = RandomAffine::new(1.0, 30.0);
+        let input = Tensor::<4>::zeros([128, 3, 32, 32], &device);
 
         let output = affine.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([128, 3, 32, 32]));
@@ -328,10 +327,10 @@ mod tests {
 
     #[test]
     fn test_random_flip_and_affine_can_be_chained() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Horizontal);
-        let affine = RandomAffine::<B>::new(1.0, 30.0);
+        let flip = RandomFlip::new(1.0, Orientation::Horizontal);
+        let affine = RandomAffine::new(1.0, 30.0);
 
-        let input = Tensor::<B, 4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
 
         let flipped = flip.execute(input.clone());
         let final_output = affine.execute(flipped);
@@ -341,12 +340,12 @@ mod tests {
 
     #[test]
     fn test_random_flip_horizontal_values() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Horizontal);
+        let flip = RandomFlip::new(1.0, Orientation::Horizontal);
 
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
         let output = flip.execute(input);
 
-        let expected = Tensor::<B, 4>::from([[[[3., 2., 1.], [6., 5., 4.]]]]);
+        let expected = Tensor::<4>::from([[[[3., 2., 1.], [6., 5., 4.]]]]);
 
         expected
             .to_data()
@@ -355,12 +354,12 @@ mod tests {
 
     #[test]
     fn test_random_flip_vertical_values() {
-        let flip = RandomFlip::<B>::new(1.0, Orientation::Vertical);
+        let flip = RandomFlip::new(1.0, Orientation::Vertical);
 
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
         let output = flip.execute(input);
 
-        let expected = Tensor::<B, 4>::from([[[[4., 5., 6.], [1., 2., 3.]]]]);
+        let expected = Tensor::<4>::from([[[[4., 5., 6.], [1., 2., 3.]]]]);
 
         expected
             .to_data()
@@ -369,13 +368,13 @@ mod tests {
 
     #[test]
     fn test_random_affine_rotation_45_values() {
-        let affine = RandomAffine::<B>::new(1.0, 45.0);
+        let affine = RandomAffine::new(1.0, 45.0);
 
-        let input = Tensor::<B, 4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
 
         let output = affine.execute(input.clone());
 
-        let expected = Tensor::<B, 4>::from([[[[1.7500, 2.7929], [1.8358, 3.7500]]]]);
+        let expected = Tensor::<4>::from([[[[1.7500, 2.7929], [1.8358, 3.7500]]]]);
 
         expected
             .to_data()
@@ -384,13 +383,13 @@ mod tests {
 
     #[test]
     fn test_random_affine_rotation_90_values() {
-        let affine = RandomAffine::<B>::new(1.0, 90.0);
+        let affine = RandomAffine::new(1.0, 90.0);
 
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.], [7., 8., 9.]]]]);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.], [7., 8., 9.]]]]);
 
         let output = affine.execute(input.clone());
 
-        let expected = Tensor::<B, 4>::from([[[[3., 6., 9.], [3., 6., 9.], [3., 6., 9.]]]]);
+        let expected = Tensor::<4>::from([[[[3., 6., 9.], [3., 6., 9.], [3., 6., 9.]]]]);
 
         expected
             .to_data()
@@ -399,8 +398,8 @@ mod tests {
 
     #[test]
     fn test_random_flip_probability_zero_returns_unchanged() {
-        let flip = RandomFlip::<B>::new(0.0, Orientation::Horizontal);
-        let input = Tensor::<B, 4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let flip = RandomFlip::new(0.0, Orientation::Horizontal);
+        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
 
         let output = flip.execute(input.clone());
 

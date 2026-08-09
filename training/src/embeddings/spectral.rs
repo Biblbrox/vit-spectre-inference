@@ -3,8 +3,9 @@ use std::f32::consts::PI;
 use burn::{
     config::Config,
     module::Module,
-    prelude::Tensor,
-    tensor::{Shape, TensorData, backend::Backend},
+    backend::Backend,
+    prelude::{Device, Tensor},
+    tensor::{Shape, TensorData},
 };
 
 use crate::{
@@ -70,12 +71,12 @@ fn zigzag_indices(p: usize, count: usize) -> Vec<(usize, usize)> {
 /// Layout is block-diagonal over channels: channel c owns output rows
 /// [c*K .. (c+1)*K) and uses the first K = embed_dim/in_channels 2-D DCT
 /// basis functions (zig-zag order) applied to its p² pixel block only.
-fn build_dct_weight<B: Backend>(
+fn build_dct_weight(
     patch_size: usize,
     in_channels: usize,
     embed_dim: usize,
-    device: &B::Device,
-) -> Tensor<B, 2> {
+    device: &Device,
+) -> Tensor<2> {
     let p = patch_size;
     let p2 = p * p;
     let total_in = in_channels * p2;
@@ -98,7 +99,7 @@ fn build_dct_weight<B: Backend>(
         }
     }
 
-    Tensor::<B, 2>::from_data(
+    Tensor::<2>::from_data(
         TensorData::new(w, Shape::new([embed_dim, total_in])),
         device,
     )
@@ -109,15 +110,16 @@ fn build_dct_weight<B: Backend>(
 // TODO: For now, this patcher doesn't work with layers deeper than 4
 // Investigation required to fix it
 #[derive(Module, Debug)]
-pub struct DCTPatcher<B: Backend> {
+pub struct DCTPatcher {
     /// Fixed DCT projection — [embed_dim, in_channels * patch_size²].
-    dct_weight: Tensor<B, 3>,
+    dct_weight: Tensor<3>,
     patch_size: usize,
 
-    emb_dct: DctLinear<B>,
-    tok_dct: DctLinear<B>,
-    norm_tokens: DynamicERF<B>,
-    norm_embed: DynamicERF<B>,
+    emb_dct: DctLinear,
+    tok_dct: DctLinear,
+    norm_tokens: DynamicERF,
+    norm_embed: DynamicERF,
+    
 }
 
 #[derive(Config, Debug)]
@@ -128,10 +130,10 @@ pub struct DCTPatcherConfig {
     seq_length: usize,
 }
 
-impl<B: Backend> DCTPatcher<B> {
+impl DCTPatcher {
     /// - `images` : `[B, C, H, W]`
     /// - returns  : `[B, num_patches, embed_dim]`
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 3> {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<3> {
         let [batch, channels, height, width] = images.dims();
         let p = self.patch_size;
         let ph = height / p;
@@ -159,9 +161,9 @@ impl<B: Backend> DCTPatcher<B> {
 }
 
 impl DCTPatcherConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DCTPatcher<B> {
+    pub fn init(&self, device: &Device) -> DCTPatcher {
         let weight =
-            build_dct_weight::<B>(self.patch_size, self.in_channels, self.embed_dim, device);
+            build_dct_weight(self.patch_size, self.in_channels, self.embed_dim, device);
 
         DCTPatcher {
             dct_weight: weight.unsqueeze_dim(0),

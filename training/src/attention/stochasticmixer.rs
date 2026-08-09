@@ -1,7 +1,9 @@
+
 use burn::{
     module::{Module, Param},
-    prelude::Tensor,
-    tensor::{Distribution, activation::softmax, backend::Backend},
+    prelude::{Device, Tensor},
+    backend::Backend,
+    tensor::{Distribution, activation::softmax},
 };
 
 use crate::attention::{
@@ -39,10 +41,10 @@ impl StochasticAttentionConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct StochasticAttention<B: Backend> {
-    q_mat: Param<Tensor<B, 4>>,
-    k_mat: Param<Tensor<B, 4>>,
-    v_mat: Param<Tensor<B, 4>>,
+pub struct StochasticAttention {
+    q_mat: Param<Tensor<4>>,
+    k_mat: Param<Tensor<4>>,
+    v_mat: Param<Tensor<4>>,
     inv_scale: f32,
     temperature: f32,
     nhead: usize,
@@ -51,21 +53,18 @@ pub struct StochasticAttention<B: Backend> {
     norm_mode: NormalizationMode,
     score_mode: StochasticMul,
     train_mode: TrainingMode,
+    
 }
 
-impl<B: Backend> StochasticAttention<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl StochasticAttention {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         match self.train_mode {
             TrainingMode::Soft => self.forward_soft(x),
-            TrainingMode::Hard => self.forward_hard(x),
-            TrainingMode::Mixed => match B::ad_enabled(&x.device()) {
-                true => self.forward_soft(x),
-                false => self.forward_hard(x),
-            },
+            TrainingMode::Hard | TrainingMode::Mixed => self.forward_hard(x),
         }
     }
 
-    fn calc_scores(&self, q: Tensor<B, 4>, k: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn calc_scores(&self, q: Tensor<4>, k: Tensor<4>) -> Tensor<4> {
         // [B,H,N,dk] x [B,H,dk,N] -> [B,H,N,N], all-pairs scores
         let scores = q.matmul(k.transpose()) * self.inv_scale;
         match self.score_mode {
@@ -75,7 +74,7 @@ impl<B: Backend> StochasticAttention<B> {
         }
     }
 
-    pub fn forward_hard(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward_hard(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -100,7 +99,7 @@ impl<B: Backend> StochasticAttention<B> {
         out.swap_dims(1, 2).reshape([b, n, e])
     }
 
-    pub fn forward_soft(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward_soft(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -127,12 +126,12 @@ impl<B: Backend> StochasticAttention<B> {
 }
 
 impl StochasticAttentionConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticAttention<B> {
+    pub fn init(&self, device: &Device) -> StochasticAttention {
         let dk = self.embed_dim / self.nhead;
         let logit_std = (1.0 / dk as f64).sqrt();
 
         let init_logits = || {
-            Param::from_tensor(Tensor::<B, 4>::random(
+            Param::from_tensor(Tensor::<4>::random(
                 [1, 1, dk, dk],
                 Distribution::Normal(0.0, logit_std),
                 device,

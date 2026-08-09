@@ -4,13 +4,15 @@ version = "0.0.2"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.21.0", features = [
+burn = { version = "0.22.0-pre.1", features = [
   "fusion",
   "std",
   "cuda",
   "train",
   "tui",
   "flex",
+  "autodiff",
+  "burn-dispatch"
 ], default-features = false }
 polars = { version = "0.54.4", features = [
   "async",

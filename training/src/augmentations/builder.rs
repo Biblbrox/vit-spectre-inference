@@ -1,5 +1,4 @@
-use burn::backend::Autodiff;
-use burn::tensor::backend::Backend;
+use burn::tensor::Device;
 use serde::{Deserialize, Serialize};
 
 use crate::augmentations::colors::{ColorJitter, GaussianBlur, RandomErasing, RandomGrayscale};
@@ -52,11 +51,11 @@ impl AugmentationBuilder {
         AugmentationBuilder {}
     }
 
-    fn match_transform<B: Backend>(
+    fn match_transform(
         &self,
         transform: &TransformConfig,
-        transforms_vec: &mut Vec<Box<dyn Augmentation<B>>>,
-        device: &B::Device,
+        transforms_vec: &mut Vec<Box<dyn Augmentation>>,
+        device: &Device,
     ) {
         match transform.name.as_str() {
             "normalize" => {
@@ -80,7 +79,7 @@ impl AugmentationBuilder {
                             .collect::<Vec<f32>>()
                     })
                     .unwrap_or_default();
-                transforms_vec.push(Box::new(Normalize::<B>::new(std, mean, device)));
+                transforms_vec.push(Box::new(Normalize::new(std, mean, device)));
             }
             "random_flip" => {
                 let p = transform.params["probability"].as_float().unwrap();
@@ -88,18 +87,18 @@ impl AugmentationBuilder {
                     "horizontal" => Orientation::Horizontal,
                     _ => Orientation::Vertical,
                 };
-                transforms_vec.push(Box::new(RandomFlip::<B>::new(p, orientation)));
+                transforms_vec.push(Box::new(RandomFlip::new(p, orientation)));
             }
             "random_affine" => {
                 let p = transform.params["probability"].as_float().unwrap();
                 let degrees = transform.params["degrees"].as_float().unwrap();
-                transforms_vec.push(Box::new(RandomAffine::<B>::new(p, degrees as f32)));
+                transforms_vec.push(Box::new(RandomAffine::new(p, degrees as f32)));
             }
             "color_jitter" => {
                 let brightness = transform.params["brightness"].as_float().unwrap();
                 let contrast = transform.params["contrast"].as_float().unwrap();
                 let saturation = transform.params["saturation"].as_float().unwrap();
-                transforms_vec.push(Box::new(ColorJitter::<B>::new(
+                transforms_vec.push(Box::new(ColorJitter::new(
                     brightness as f32,
                     contrast as f32,
                     saturation as f32,
@@ -109,7 +108,7 @@ impl AugmentationBuilder {
                 let p = transform.params["probability"].as_float().unwrap();
                 let min_scale = transform.params["min_scale"].as_float().unwrap();
                 let max_scale = transform.params["max_scale"].as_float().unwrap();
-                let mut er = RandomErasing::<B>::new();
+                let mut er = RandomErasing::new();
                 er = er.with_p(p).with_scale(min_scale, max_scale);
                 transforms_vec.push(Box::new(er));
             }
@@ -118,13 +117,13 @@ impl AugmentationBuilder {
                 let kernel_size = transform.params["kernel_size"].as_integer().unwrap() as usize;
                 let min_sigma = transform.params["min_sigma"].as_float().unwrap();
                 let max_sigma = transform.params["max_sigma"].as_float().unwrap();
-                let mut gb = GaussianBlur::<B>::new(kernel_size, device);
+                let mut gb = GaussianBlur::new(kernel_size, device);
                 gb = gb.with_p(p).with_sigma(min_sigma, max_sigma);
                 transforms_vec.push(Box::new(gb));
             }
             "random_grayscale" => {
                 let p = transform.params["probability"].as_float().unwrap();
-                transforms_vec.push(Box::new(RandomGrayscale::<B>::new(p)));
+                transforms_vec.push(Box::new(RandomGrayscale::new(p)));
             }
             _ => {
                 eprintln!("Unknown augmentation: {}", transform.name);
@@ -132,20 +131,21 @@ impl AugmentationBuilder {
         }
     }
 
-    pub fn build<B: Backend>(
+    pub fn build(
         &self,
         config: &AugmentationConfig,
-        device: &B::Device,
-    ) -> (Pipeline<Autodiff<B>>, Pipeline<B>) {
-        let mut transforms_train: Vec<Box<dyn Augmentation<Autodiff<B>>>> = Vec::new();
-        let mut transforms_val: Vec<Box<dyn Augmentation<B>>> = Vec::new();
+        device: &Device,
+        training_device: &Device,
+    ) -> (Pipeline, Pipeline) {
+        let mut transforms_train: Vec<Box<dyn Augmentation>> = Vec::new();
+        let mut transforms_val: Vec<Box<dyn Augmentation>> = Vec::new();
 
         for transform in &config.transforms_train {
-            self.match_transform::<Autodiff<B>>(transform, &mut transforms_train, device);
+            self.match_transform(transform, &mut transforms_train, training_device);
         }
 
         for transform in &config.transforms_val {
-            self.match_transform::<B>(transform, &mut transforms_val, device);
+            self.match_transform(transform, &mut transforms_val, device);
         }
 
         (

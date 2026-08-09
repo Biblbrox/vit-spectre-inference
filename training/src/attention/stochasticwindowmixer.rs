@@ -1,7 +1,10 @@
+
 use burn::{
     module::{Module, Param},
-    prelude::Tensor,
-    tensor::{Distribution, Int, activation::softmax, backend::Backend},
+    prelude::{Device, Tensor},
+    backend::Backend,
+    
+tensor::{Distribution, Int, activation::softmax},
 };
 
 use crate::attention::{
@@ -53,26 +56,27 @@ impl StochasticAttentionWindowConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct StochasticAttentionWindow<B: Backend> {
-    q_mat: Param<Tensor<B, 4>>,
-    k_mat: Param<Tensor<B, 4>>,
-    v_mat: Param<Tensor<B, 4>>,
+pub struct StochasticAttentionWindow {
+    q_mat: Param<Tensor<4>>,
+    k_mat: Param<Tensor<4>>,
+    v_mat: Param<Tensor<4>>,
     inv_scale: f32,
-    band_bias: Param<Tensor<B, 5>>, // [H, N, 2w+1]
+    band_bias: Param<Tensor<5>>, // [H, N, 2w+1]
     temperature: f32,
     half_width: usize,
     nhead: usize,
     dk: usize,
-    window_indices: Tensor<B, 1, Int>, // [N * bw]
+    window_indices: Tensor<1, Int>, // [N * bw]
     stoch_mode: StochasticSelect,
     norm_mode: NormalizationMode,
     score_mode: StochasticMul,
     train_mode: TrainingMode,
     seq_length: usize,
+    
 }
 
-impl<B: Backend> StochasticAttentionWindow<B> {
-    fn local_window(&self, x: Tensor<B, 4>) -> Tensor<B, 5> {
+impl StochasticAttentionWindow {
+    fn local_window(&self, x: Tensor<4>) -> Tensor<5> {
         let [b, n, h, dk] = x.dims();
         let bw = 2 * self.half_width + 1;
 
@@ -87,11 +91,11 @@ impl<B: Backend> StochasticAttentionWindow<B> {
             .permute([0, 1, 3, 4, 2]) // [B, N, H, dk, bw]
     }
 
-    fn calc_qkv_soft(&self) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 4>) {
+    fn calc_qkv_soft(&self) -> (Tensor<4>, Tensor<4>, Tensor<4>) {
         let (do_q, do_k, do_v) = self.stoch_mode.flags();
         let t = self.temperature;
 
-        let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+        let apply = |do_it: bool, mat: Tensor<4>| -> Tensor<4> {
             if do_it {
                 sinkhorn(mat, t, self.norm_mode)
             } else {
@@ -106,12 +110,12 @@ impl<B: Backend> StochasticAttentionWindow<B> {
         )
     }
 
-    fn calc_qkv_hard(&self, x: Tensor<B, 4>) -> (Tensor<B, 5>, Tensor<B, 5>, Tensor<B, 5>) {
+    fn calc_qkv_hard(&self, x: Tensor<4>) -> (Tensor<5>, Tensor<5>, Tensor<5>) {
         let dk = x.dims()[3];
         let (do_q, do_k, do_v) = self.stoch_mode.flags();
 
         // Either select the argmax "hard" index along dk, or apply the matrix as a linear map.
-        let apply = |do_it: bool, mat: Tensor<B, 4>| -> Tensor<B, 4> {
+        let apply = |do_it: bool, mat: Tensor<4>| -> Tensor<4> {
             if do_it {
                 x.clone().select(3, mat.argmax(2).reshape([dk]))
             } else {
@@ -126,18 +130,14 @@ impl<B: Backend> StochasticAttentionWindow<B> {
         (q, k, v)
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         match self.train_mode {
             TrainingMode::Soft => self.forward_soft(x),
-            TrainingMode::Hard => self.forward_hard(x),
-            TrainingMode::Mixed => match B::ad_enabled(&x.device()) {
-                true => self.forward_soft(x),
-                false => self.forward_hard(x),
-            },
+            TrainingMode::Hard | TrainingMode::Mixed => self.forward_hard(x),
         }
     }
 
-    fn calc_scores(&self, q: Tensor<B, 5>, k_win: Tensor<B, 5>) -> Tensor<B, 5> {
+    fn calc_scores(&self, q: Tensor<5>, k_win: Tensor<5>) -> Tensor<5> {
         let scores = q.matmul(k_win) * self.inv_scale + self.band_bias.val();
         match self.score_mode {
             StochasticMul::Softmax => softmax(scores, 4),
@@ -146,7 +146,7 @@ impl<B: Backend> StochasticAttentionWindow<B> {
         } // [B,N,H,1,bw]
     }
 
-    pub fn forward_hard(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward_hard(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -160,7 +160,7 @@ impl<B: Backend> StochasticAttentionWindow<B> {
         out.reshape([b, n, e])
     }
 
-    pub fn forward_soft(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward_soft(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -183,7 +183,7 @@ impl<B: Backend> StochasticAttentionWindow<B> {
 }
 
 impl StochasticAttentionWindowConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticAttentionWindow<B> {
+    pub fn init(&self, device: &Device) -> StochasticAttentionWindow {
         let w = (self.kernel_size - 1) / 2;
         let window = 2 * w + 1;
         let dk = self.embed_dim / self.nhead; // head dim
@@ -191,13 +191,13 @@ impl StochasticAttentionWindowConfig {
 
         let logit_std = (1.0 / dk as f64).sqrt();
 
-        let pos = Tensor::<B, 1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
-        let offsets = Tensor::<B, 1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
+        let pos = Tensor::<1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
+        let offsets = Tensor::<1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
             .reshape([1, 1, 1, window]);
         let window_indices = (pos + offsets).clamp(0, n as i64 - 1); // [1, N, 1, bw]
 
         let init_logits = || {
-            Param::from_tensor(Tensor::<B, 4>::random(
+            Param::from_tensor(Tensor::<4>::random(
                 // [1, self.seq_length, dk, dk],
                 [1, 1, dk, dk],
                 Distribution::Normal(0.0, logit_std),
@@ -207,7 +207,7 @@ impl StochasticAttentionWindowConfig {
         };
 
         StochasticAttentionWindow {
-            band_bias: Param::from_tensor(Tensor::<B, 5>::zeros(
+            band_bias: Param::from_tensor(Tensor::<5>::zeros(
                 [1, self.seq_length, self.nhead, 1, window],
                 device,
             ))
@@ -236,7 +236,8 @@ impl StochasticAttentionWindowConfig {
 mod tests {
     use burn::{
         backend::{Flex, flex::FlexDevice},
-        tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
+        
+tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
     };
 
     type B = Flex;
@@ -247,10 +248,10 @@ mod tests {
     }
 
     /// Build window_indices (flat [N*bw]) the same way init() does.
-    fn make_window_indices(n: usize, w: usize, device: &TestDevice) -> Tensor<B, 1, Int> {
+    fn make_window_indices(n: usize, w: usize, device: &TestDevice) -> Tensor<1, Int> {
         let window = 2 * w + 1;
-        let pos = Tensor::<B, 1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
-        let offsets = Tensor::<B, 1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
+        let pos = Tensor::<1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
+        let offsets = Tensor::<1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
             .reshape([1, 1, 1, window]);
         (pos + offsets).clamp(0, n as i64 - 1).reshape([n * window])
     }
@@ -258,10 +259,10 @@ mod tests {
     /// select-based local_window: drop-in replacement for pad+unfold.
     /// x: [B, N, H, dk] → [B, N, H, dk, bw]
     fn local_window_select(
-        x: Tensor<B, 4>,
-        window_indices: Tensor<B, 1, Int>,
+        x: Tensor<4>,
+        window_indices: Tensor<1, Int>,
         w: usize,
-    ) -> Tensor<B, 5> {
+    ) -> Tensor<5> {
         let [b, n, h, dk] = x.dims();
         let bw = 2 * w + 1;
         let gathered = x.select(1, window_indices); // [B, N*bw, H, dk]
@@ -273,13 +274,13 @@ mod tests {
 
     /// Original pad+unfold approach.
     /// x: [B, N, H, dk] → [B, N, H, dk, bw]
-    fn local_window_unfold(x: Tensor<B, 4>, w: usize) -> Tensor<B, 5> {
+    fn local_window_unfold(x: Tensor<4>, w: usize) -> Tensor<5> {
         let bw = 2 * w + 1;
         let x_pad = x.pad([(0, 0), (w, w), (0, 0), (0, 0)], PadMode::Constant(0.0));
         x_pad.unfold(1, bw, 1) // [B, N, H, dk, bw]
     }
 
-    fn max_abs_diff(a: Tensor<B, 5>, b: Tensor<B, 5>) -> f32 {
+    fn max_abs_diff(a: Tensor<5>, b: Tensor<5>) -> f32 {
         (a - b).abs().max().into_scalar()
     }
 
@@ -293,7 +294,7 @@ mod tests {
         // Deterministic input: value = position index so we can reason about it
         let data: Vec<f32> = (0..(b * n * h * dk) as i32).map(|i| i as f32).collect();
         let x =
-            Tensor::<B, 4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -320,7 +321,7 @@ mod tests {
             .map(|i| i as f32 + 1.0)
             .collect();
         let x =
-            Tensor::<B, 4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -356,7 +357,7 @@ mod tests {
             .map(|i| ((i as f32 * 1.6180339) % 7.0) - 3.5) // pseudo-random spread
             .collect();
         let x =
-            Tensor::<B, 4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -378,7 +379,7 @@ mod tests {
 
         let data: Vec<f32> = (0..(b * n * h * dk) as i32).map(|i| i as f32).collect();
         let x =
-            Tensor::<B, 4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w); // [B,N,H,dk,1]
@@ -407,7 +408,7 @@ mod tests {
         for (b, n, h, dk, w) in [(1, 4, 1, 2, 1), (2, 8, 4, 16, 2), (1, 16, 8, 32, 4)] {
             let bw = 2 * w + 1;
             let data = vec![0.0f32; b * n * h * dk];
-            let x = Tensor::<B, 4>::from_data(
+            let x = Tensor::<4>::from_data(
                 TensorData::new(data, Shape::new([b, n, h, dk])),
                 &device,
             );
@@ -442,7 +443,7 @@ mod tests {
         // x[0, 0, 0, :] = [1, 2]
         // x[0, 1, 0, :] = [3, 4]
         // x[0, 2, 0, :] = [5, 6]
-        let x = Tensor::<B, 4>::from_data(
+        let x = Tensor::<4>::from_data(
             TensorData::new(vec![1.0f32, 2., 3., 4., 5., 6.], Shape::new([b, n, h, dk])),
             &device,
         );
@@ -458,7 +459,7 @@ mod tests {
         let select_mid = select_out.slice_dim(1, s![1..2]).reshape([dk, bw]);
         let unfold_mid = unfold_out.slice_dim(1, s![1..2]).reshape([dk, bw]);
 
-        let expected = Tensor::<B, 2>::from_data(
+        let expected = Tensor::<2>::from_data(
             TensorData::new(vec![1.0f32, 3., 5., 2., 4., 6.], Shape::new([dk, bw])),
             &device,
         );

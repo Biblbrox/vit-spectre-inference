@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use burn::{
-    tensor::backend::Backend,
+    backend::Backend,
     train::{
         ClassificationOutput,
         metric::{
@@ -11,7 +11,7 @@ use burn::{
     },
 };
 
-impl<B: Backend> Adaptor<ThroughputInput> for ClassificationOutput<B> {
+impl Adaptor<ThroughputInput> for ClassificationOutput {
     fn adapt(&self) -> ThroughputInput {
         ThroughputInput {
             batch_size: self.targets.dims()[0],
@@ -94,6 +94,18 @@ impl Metric for ThroughputMetric {
         )
     }
 
+    fn compute(&mut self) -> SerializedEntry {
+        if self.count > 0 {
+            let avg = self.total_throughput / self.count as f64;
+            SerializedEntry::new(
+                format!("{:.0} samples/s", avg),
+                avg.to_string(),
+            )
+        } else {
+            SerializedEntry::new("0 samples/s".to_string(), "0.0".to_string())
+        }
+    }
+
     fn clear(&mut self) {
         self.last_tick = None;
         self.current_throughput = 0.0;
@@ -103,18 +115,26 @@ impl Metric for ThroughputMetric {
 }
 
 impl Numeric for ThroughputMetric {
-    fn value(&self) -> NumericEntry {
-        NumericEntry::Value(self.current_throughput)
+    fn value(&self) -> Option<NumericEntry> {
+        Some(NumericEntry::Value(self.current_throughput))
     }
 
-    fn running_value(&self) -> NumericEntry {
-        NumericEntry::Aggregated {
+    fn running_value(&self) -> Option<NumericEntry> {
+        Some(NumericEntry::Aggregated {
             aggregated_value: if self.count > 0 {
                 self.total_throughput / self.count as f64
             } else {
                 0.0
             },
             count: self.count,
-        }
+        })
+    }
+
+    fn final_value(&self) -> NumericEntry {
+        NumericEntry::Value(if self.count > 0 {
+            self.total_throughput / self.count as f64
+        } else {
+            0.0
+        })
     }
 }

@@ -1,12 +1,8 @@
 use burn::{
     Tensor,
-    backend::Autodiff,
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
-    tensor::{
-        Int,
-        backend::{AutodiffBackend, Backend},
-    },
+    tensor::{Device, Int},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use serde::Deserialize;
@@ -20,11 +16,11 @@ use crate::{
 };
 
 #[derive(Module, Debug)]
-pub struct FastViT<B: Backend> {
-    embedding_block: PatchEmbedding<B>,
-    encoder: FastEncoder<B>,
-    layer_norm: DynamicERF<B>,
-    linear: Linear<B>,
+pub struct FastViT {
+    embedding_block: PatchEmbedding,
+    encoder: FastEncoder,
+    layer_norm: DynamicERF,
+    linear: Linear,
     in_channels: usize,
     image_size: usize,
 }
@@ -40,8 +36,8 @@ pub struct FastViTConfig {
     pub nheads: usize,
 }
 
-impl<B: Backend> FastViT<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 2> {
+impl FastViT {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<2> {
         let x = self.embedding_block.forward(images);
         let x = self.encoder.forward(x);
         let x = self.layer_norm.forward(x);
@@ -51,9 +47,9 @@ impl<B: Backend> FastViT<B> {
 
     pub fn forward_classification(
         &self,
-        images: Tensor<B, 4>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
+        images: Tensor<4>,
+        targets: Tensor<1, Int>,
+    ) -> ClassificationOutput {
         let output = self.forward(images);
         let loss = CrossEntropyLossConfig::new()
             .init(&output.device())
@@ -64,13 +60,13 @@ impl<B: Backend> FastViT<B> {
 }
 
 impl FastViTConfig {
-    pub fn init<B: Backend>(
+    pub fn init(
         &self,
-        device: &B::Device,
+        device: &Device,
         in_channels: usize,
         image_size: usize,
         num_classes: usize,
-    ) -> FastViT<B> {
+    ) -> FastViT {
         let grid_size = image_size / self.patch_size;
         let num_patches = grid_size.pow(2);
 
@@ -110,11 +106,11 @@ impl FastViTConfig {
     }
 }
 
-impl<B: Backend> ModelConfig<B> for FastViTConfig {
-    type TrainModel = FastViT<Autodiff<B>>;
-    type ValidModel = FastViT<B>;
+impl ModelConfig for FastViTConfig {
+    type TrainModel = FastViT;
+    type ValidModel = FastViT;
 
-    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+    fn init_training(&self, device: &Device, config: &TrainConfig) -> Self::TrainModel {
         self.init(
             device,
             config.in_channels,
@@ -123,7 +119,7 @@ impl<B: Backend> ModelConfig<B> for FastViTConfig {
         )
     }
 
-    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+    fn init_inference(&self, device: &Device, config: &TrainConfig) -> Self::ValidModel {
         self.init(
             device,
             config.in_channels,
@@ -133,11 +129,11 @@ impl<B: Backend> ModelConfig<B> for FastViTConfig {
     }
 }
 
-impl<B: AutodiffBackend> TrainStep for FastViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl TrainStep for FastViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> TrainOutput<ClassificationOutput<B>> {
+    fn step(&self, batch: Batch) -> TrainOutput<ClassificationOutput> {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -150,11 +146,11 @@ impl<B: AutodiffBackend> TrainStep for FastViT<B> {
     }
 }
 
-impl<B: Backend> InferenceStep for FastViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl InferenceStep for FastViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> ClassificationOutput<B> {
+    fn step(&self, batch: Batch) -> ClassificationOutput {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -170,8 +166,8 @@ mod tests {
     use super::*;
     use crate::models::fast_vit::FastViTConfig;
     use burn::{
+        Shape,
         backend::{Flex, flex::FlexDevice},
-        tensor::Shape,
     };
 
     type B = Flex;
@@ -203,11 +199,11 @@ mod tests {
     #[test]
     fn test_vit() {
         let device = Device::default();
-        let test_image = Tensor::<B, 4>::zeros(
+        let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
         );
-        let model = test_config().init::<B>(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
+        let model = test_config().init(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
         let vit_output = model.forward(test_image);
         assert_eq!(vit_output.shape(), Shape::new([BATCH_SIZE, NUM_CLASSES]));
     }

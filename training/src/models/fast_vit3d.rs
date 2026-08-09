@@ -1,9 +1,9 @@
 use burn::{
     Tensor,
-    backend::Autodiff,
+    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
-    tensor::{Int, backend::AutodiffBackend, backend::Backend},
+    tensor::{Device, Int},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use serde::Deserialize;
@@ -21,12 +21,13 @@ const NUM_POINTS: usize = 1024;
 const NUM_CHANNELS: usize = 3;
 
 #[derive(Module, Debug)]
-pub struct FastViT3D<B: Backend> {
-    embedding_block: CloudPatchEmbedding<B>,
-    encoder: FastEncoder<B>,
-    layer_norm: DynamicERF<B>,
-    linear: Linear<B>,
+pub struct FastViT3D {
+    embedding_block: CloudPatchEmbedding,
+    encoder: FastEncoder,
+    layer_norm: DynamicERF,
+    linear: Linear,
     num_centers: usize,
+    
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,8 +43,8 @@ pub struct FastViT3DConfig {
     pub nheads: usize,
 }
 
-impl<B: Backend> FastViT3D<B> {
-    pub fn forward(&self, points: Tensor<B, 3>) -> Tensor<B, 2> {
+impl FastViT3D {
+    pub fn forward(&self, points: Tensor<3>) -> Tensor<2> {
         let x = self.embedding_block.forward(points);
         let x = self.encoder.forward(x);
         let x = self.layer_norm.forward(x);
@@ -53,9 +54,9 @@ impl<B: Backend> FastViT3D<B> {
 
     pub fn forward_classification(
         &self,
-        points: Tensor<B, 3>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
+        points: Tensor<3>,
+        targets: Tensor<1, Int>,
+    ) -> ClassificationOutput {
         let output = self.forward(points);
         let loss = CrossEntropyLossConfig::new()
             .init(&output.device())
@@ -66,7 +67,7 @@ impl<B: Backend> FastViT3D<B> {
 }
 
 impl FastViT3DConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device, num_classes: usize) -> FastViT3D<B> {
+    pub fn init(&self, device: &Device, num_classes: usize) -> FastViT3D {
         FastViT3D {
             embedding_block: CloudPatchEmbeddingConfig::new(
                 self.num_centers,
@@ -102,24 +103,24 @@ impl FastViT3DConfig {
     }
 }
 
-impl<B: Backend> ModelConfig<B> for FastViT3DConfig {
-    type TrainModel = FastViT3D<Autodiff<B>>;
-    type ValidModel = FastViT3D<B>;
+impl ModelConfig for FastViT3DConfig {
+    type TrainModel = FastViT3D;
+    type ValidModel = FastViT3D;
 
-    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+    fn init_training(&self, device: &Device, config: &TrainConfig) -> Self::TrainModel {
         self.init(device, config.num_classes)
     }
 
-    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+    fn init_inference(&self, device: &Device, config: &TrainConfig) -> Self::ValidModel {
         self.init(device, config.num_classes)
     }
 }
 
-impl<B: AutodiffBackend> TrainStep for FastViT3D<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl TrainStep for FastViT3D {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> TrainOutput<ClassificationOutput<B>> {
+    fn step(&self, batch: Batch) -> TrainOutput<ClassificationOutput> {
         let points = batch
             .data
             .clone()
@@ -130,11 +131,11 @@ impl<B: AutodiffBackend> TrainStep for FastViT3D<B> {
     }
 }
 
-impl<B: Backend> InferenceStep for FastViT3D<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl InferenceStep for FastViT3D {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> ClassificationOutput<B> {
+    fn step(&self, batch: Batch) -> ClassificationOutput {
         let points = batch
             .data
             .clone()
@@ -148,7 +149,7 @@ mod tests {
     use super::*;
     use burn::{
         backend::{Flex, flex::FlexDevice},
-        tensor::Shape,
+        Shape,
     };
 
     type B = Flex;
@@ -185,8 +186,8 @@ mod tests {
     fn test_fast_vit3d() {
         let device = Device::default();
         let test_points =
-            Tensor::<B, 3>::zeros(Shape::new([BATCH_SIZE, NUM_POINTS, NUM_CHANNELS]), &device);
-        let model = test_config().init::<B>(&device, NUM_CLASSES);
+            Tensor::<3>::zeros(Shape::new([BATCH_SIZE, NUM_POINTS, NUM_CHANNELS]), &device);
+        let model = test_config().init(&device, NUM_CLASSES);
         let output = model.forward(test_points);
         assert_eq!(output.shape(), Shape::new([BATCH_SIZE, NUM_CLASSES]));
     }

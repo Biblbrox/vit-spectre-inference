@@ -1,4 +1,4 @@
-use burn::tensor::ops::FloatTensor;
+use burn::backend::tensor::FloatTensor;
 use burn_cubecl::{CubeRuntime, FloatElement};
 
 fn monarch_fused<R: CubeRuntime, E: FloatElement>(
@@ -12,13 +12,13 @@ fn monarch_fused<R: CubeRuntime, E: FloatElement>(
 
     // Implement the backward trait for the given backend B, the node gradient
     // with three other gradients to calculate (lhs, rhs, and bias).
-    impl<B: Backend> Backward<B, 3> for FusedMatmulAddReluBackward {
+    impl Backward<B, 3> for FusedMatmulAddReluBackward {
         // Our state that we must build during the forward pass to compute the backward pass.
         //
         // Note that we could improve the performance further by only keeping the state of
         // tensors that are tracked, improving memory management, but for simplicity, we avoid
         // that part.
-        type State = (NodeId, NodeId, FloatTensor<B>, Shape);
+        type State = (NodeId, NodeId, FloatTensor, Shape);
 
         fn backward(
             self,
@@ -29,12 +29,12 @@ fn monarch_fused<R: CubeRuntime, E: FloatElement>(
             // Get the nodes of each variable.
             let [node_lhs, node_rhs, node_bias] = ops.parents;
             // Fetch the gradient for the current node.
-            let grad = grads.consume::<B>(&ops.node);
+            let grad = grads.consume(&ops.node);
 
             // Set our state.
             let (lhs_state, rhs_state, output, shape_bias) = ops.state;
-            let lhs: FloatTensor<B> = checkpointer.retrieve_node_output(lhs_state);
-            let rhs: FloatTensor<B> = checkpointer.retrieve_node_output(rhs_state);
+            let lhs: FloatTensor = checkpointer.retrieve_node_output(lhs_state);
+            let rhs: FloatTensor = checkpointer.retrieve_node_output(rhs_state);
 
             // Fetch shapes of our tensor to support broadcasting.
             let shape_lhs = lhs.shape();
@@ -46,30 +46,30 @@ fn monarch_fused<R: CubeRuntime, E: FloatElement>(
 
             // Compute the lhs gradient, which is the derivative of matmul with support for
             // broadcasting.
-            let grad_lhs = broadcast_shape::<B>(
+            let grad_lhs = broadcast_shape(
                 B::float_matmul(grad_output.clone(), B::float_transpose(rhs)),
                 &shape_lhs,
             );
             // Compute the rhs gradient, which is the derivative of matmul with support for
             // broadcasting.
-            let grad_rhs = broadcast_shape::<B>(
+            let grad_rhs = broadcast_shape(
                 B::float_matmul(B::float_transpose(lhs), grad_output.clone()),
                 &shape_rhs,
             );
             // The add derivative is only 1, so we just need to support broadcasting to
             // compute the bias gradient.
-            let grad_bias = broadcast_shape::<B>(grad_output, &shape_bias);
+            let grad_bias = broadcast_shape(grad_output, &shape_bias);
 
             // Register the gradient for each variable based on whether they are marked as
             // `tracked`.
             if let Some(node) = node_bias {
-                grads.register::<B>(node.id, grad_bias);
+                grads.register(node.id, grad_bias);
             }
             if let Some(node) = node_lhs {
-                grads.register::<B>(node.id, grad_lhs);
+                grads.register(node.id, grad_lhs);
             }
             if let Some(node) = node_rhs {
-                grads.register::<B>(node.id, grad_rhs);
+                grads.register(node.id, grad_rhs);
             }
         }
     }

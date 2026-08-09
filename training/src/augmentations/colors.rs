@@ -1,44 +1,45 @@
-use std::marker::PhantomData;
 
 use burn::{
+    backend::Backend,
     Tensor,
-    tensor::{Shape, TensorPrimitive, backend::Backend, ops::ConvOptions},
+    tensor::{module::conv2d, ops::PaddedConvOptions, Device, Shape},
 };
 
 use crate::augmentations::Augmentation;
 
-pub struct ColorJitter<B: Backend> {
+pub struct ColorJitter {
     brightness: f32,
     contrast: f32,
     saturation: f32,
-    ph: PhantomData<B>,
+    
+    
 }
 
-pub struct RandomGrayscale<B: Backend> {
+pub struct RandomGrayscale {
     p: f64,
-    ph: PhantomData<B>,
+    
+    
 }
 
-impl<B: Backend> ColorJitter<B> {
-    pub fn new(brightness: f32, contrast: f32, saturation: f32) -> ColorJitter<B> {
+impl ColorJitter {
+    pub fn new(brightness: f32, contrast: f32, saturation: f32) -> ColorJitter {
         ColorJitter {
             brightness,
             contrast,
             saturation,
-            ph: PhantomData,
         }
     }
 }
 
-impl<B: Backend> RandomGrayscale<B> {
-    pub fn new(p: f64) -> RandomGrayscale<B> {
-        RandomGrayscale { p, ph: PhantomData }
+impl RandomGrayscale {
+    pub fn new(p: f64) -> RandomGrayscale {
+        RandomGrayscale { p }
     }
 }
 
-impl<B: Backend> Augmentation<B> for ColorJitter<B> {
+impl Augmentation for ColorJitter {
     // Input shape: [B, C, H, W]
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         let shape = input.shape();
 
         let mut rng = fastrand::Rng::new();
@@ -48,26 +49,27 @@ impl<B: Backend> Augmentation<B> for ColorJitter<B> {
         let st =
             [1.0 + (2.0 * self.saturation as f64 * rng.f64() - self.saturation as f64) as f32; 1];
 
-        let brightness = Tensor::<B, 1>::from_floats(br, &input.device()).reshape([1, 1, 1, 1]);
-        let contrast = Tensor::<B, 1>::from_floats(ctr, &input.device()).reshape([1, 1, 1, 1]);
-        let saturation = Tensor::<B, 1>::from_floats(st, &input.device()).reshape([1, 1, 1, 1]);
+        let brightness = Tensor::<1>::from_floats(br, &input.device()).reshape([1, 1, 1, 1]);
+        let contrast = Tensor::<1>::from_floats(ctr, &input.device()).reshape([1, 1, 1, 1]);
+        let saturation = Tensor::<1>::from_floats(st, &input.device()).reshape([1, 1, 1, 1]);
 
         let brightness = brightness
             .clone()
             .expand(Shape::new([shape[0], 1, shape[2], shape[3]]));
-        let contrast = contrast
+        let contrast: Tensor<4> = contrast
             .clone()
             .expand(Shape::new([shape[0], 1, shape[2], shape[3]]));
-        let saturation = saturation
+        let saturation: Tensor<4> = saturation
             .clone()
             .expand(Shape::new([shape[0], 1, shape[2], shape[3]]));
 
         // Adjust brightness
-        let mut res = (input.clone() * brightness).clamp(0.0, 1.0);
+        let mut res: Tensor<4> = (input.clone() * brightness).clamp(0.0_f32, 1.0_f32);
 
         // Adjust contrast
-        let mean = input.clone().mean().into_scalar();
-        res = ((res - mean) * contrast.clone() + mean).clamp(0.0, 1.0);
+        let mean: f32 = input.clone().mean().into_scalar();
+        let adjusted: Tensor<4> = (res - mean) * contrast.clone() + mean;
+        res = adjusted.clamp(0.0_f32, 1.0_f32);
 
         // Adjust saturation
         let r = res
@@ -90,9 +92,9 @@ impl<B: Backend> Augmentation<B> for ColorJitter<B> {
     }
 }
 
-impl<B: Backend> Augmentation<B> for RandomGrayscale<B> {
+impl Augmentation for RandomGrayscale {
     // Input shape: [B, C, H, W]
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         let shape = input.shape();
 
         if fastrand::Rng::new().f64() < self.p {
@@ -114,7 +116,7 @@ impl<B: Backend> Augmentation<B> for RandomGrayscale<B> {
 }
 
 /// Random Erasing (Zhong et al. 2020)
-pub struct RandomErasing<B: Backend> {
+pub struct RandomErasing {
     p: f64,
     min_scale: f64,
     max_scale: f64,
@@ -122,10 +124,11 @@ pub struct RandomErasing<B: Backend> {
     max_ratio: f64,
     fill_value: f32,
     max_attempts: usize,
-    ph: PhantomData<B>,
+    
+    
 }
 
-impl<B: Backend> RandomErasing<B> {
+impl RandomErasing {
     pub fn new() -> Self {
         Self {
             p: 0.5,
@@ -135,7 +138,6 @@ impl<B: Backend> RandomErasing<B> {
             max_ratio: 3.3,
             fill_value: 0.0,
             max_attempts: 10,
-            ph: PhantomData,
         }
     }
 
@@ -162,15 +164,15 @@ impl<B: Backend> RandomErasing<B> {
     }
 }
 
-impl<B: Backend> Default for RandomErasing<B> {
+impl Default for RandomErasing {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<B: Backend> Augmentation<B> for RandomErasing<B> {
+impl Augmentation for RandomErasing {
     // input: [B, C, H, W]
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         if fastrand::f64() > self.p as f64 {
             return input;
         }
@@ -218,25 +220,26 @@ impl<B: Backend> Augmentation<B> for RandomErasing<B> {
             }
         }
 
-        let mask = Tensor::<B, 1>::from_floats(mask_data.as_slice(), &device).reshape([b, c, h, w]);
+        let mask = Tensor::<1>::from_floats(mask_data.as_slice(), &device).reshape([b, c, h, w]);
 
-        let fill = Tensor::<B, 4>::full([b, c, h, w], self.fill_value as f64, &device);
+        let fill = Tensor::<4>::full([b, c, h, w], self.fill_value as f64, &device);
 
         input * mask.clone() + fill * (mask.neg() + 1.0)
     }
 }
 
-pub struct GaussianBlur<B: Backend> {
+pub struct GaussianBlur {
     kernel_size: usize, // must be odd
     min_sigma: f64,
     max_sigma: f64,
     p: f64,
-    device: B::Device,
-    ph: PhantomData<B>,
+    device: Device,
+    
+    
 }
 
-impl<B: Backend> GaussianBlur<B> {
-    pub fn new(kernel_size: usize, device: &B::Device) -> Self {
+impl GaussianBlur {
+    pub fn new(kernel_size: usize, device: &Device) -> Self {
         assert!(kernel_size % 2 == 1, "kernel_size must be odd");
         Self {
             kernel_size,
@@ -244,7 +247,6 @@ impl<B: Backend> GaussianBlur<B> {
             max_sigma: 2.0,
             p: 0.5,
             device: device.clone(),
-            ph: PhantomData,
         }
     }
 
@@ -259,7 +261,7 @@ impl<B: Backend> GaussianBlur<B> {
         self
     }
 
-    fn make_kernel(&self, channels: usize, sigma: f64) -> Tensor<B, 4> {
+    fn make_kernel(&self, channels: usize, sigma: f64) -> Tensor<4> {
         let k = self.kernel_size as i32;
         let half = k / 2;
         let mut data = vec![0f32; (k * k) as usize];
@@ -279,7 +281,7 @@ impl<B: Backend> GaussianBlur<B> {
             *v /= sum;
         }
 
-        let base = Tensor::<B, 1>::from_floats(data.as_slice(), &self.device).reshape([
+        let base = Tensor::<1>::from_floats(data.as_slice(), &self.device).reshape([
             1,
             1,
             self.kernel_size,
@@ -291,9 +293,9 @@ impl<B: Backend> GaussianBlur<B> {
     }
 }
 
-impl<B: Backend> Augmentation<B> for GaussianBlur<B> {
+impl Augmentation for GaussianBlur {
     // input: [B, C, H, W]
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         if fastrand::f64() > self.p as f64 {
             return input;
         }
@@ -305,16 +307,17 @@ impl<B: Backend> Augmentation<B> for GaussianBlur<B> {
         let pad = self.kernel_size / 2;
 
         // Depthwise convolution: groups = C keeps each channel independent
-        // ConvOptions::new(stride, padding, dilation, groups)
-        let options = ConvOptions::new([1, 1], [pad, pad], [1, 1], c);
+        // PaddedConvOptions::asymmetric(stride, padding_left, padding_right, dilation, groups)
+        let options = PaddedConvOptions::asymmetric(
+            [1, 1],
+            [pad, pad],
+            [pad, pad],
+            [1, 1],
+            c,
+        );
 
-        // Low-level backend op — avoids needing a Module
-        Tensor::<B, 4>::from_primitive(TensorPrimitive::Float(B::conv2d(
-            input.into_primitive().tensor(),
-            kernel.into_primitive().tensor(),
-            None,
-            options,
-        )))
+        // High-level conv2d API
+        conv2d(input, kernel, None, options)
     }
 }
 
@@ -323,7 +326,8 @@ mod tests {
     use burn::{
         Tensor,
         backend::{Flex, flex::FlexDevice},
-        tensor::{Shape, TensorData, Tolerance},
+        
+tensor::{Shape, TensorData, Tolerance},
     };
 
     use crate::augmentations::{
@@ -338,9 +342,9 @@ mod tests {
     fn test_color_jitter_zero_params_preserves_input() {
         let device = Device::default();
         // With all parameters set to 0, no change should occur
-        let jitter = ColorJitter::<B>::new(0.0, 0.0, 0.0);
+        let jitter = ColorJitter::new(0.0, 0.0, 0.0);
 
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(
                 vec![
                     0.2f32, 0.4, 0.6, 0.8, 0.3, 0.5, 0.7, 0.9, 0.1, 0.3, 0.5, 0.7,
@@ -361,9 +365,9 @@ mod tests {
     #[test]
     fn test_color_jitter_preserves_shape() {
         let device = Device::default();
-        let jitter = ColorJitter::<B>::new(0.5, 0.5, 0.5);
+        let jitter = ColorJitter::new(0.5, 0.5, 0.5);
 
-        let input = Tensor::<B, 4>::random(
+        let input = Tensor::<4>::random(
             Shape::new([4, 3, 32, 32]),
             burn::tensor::Distribution::Uniform(0.0, 1.0),
             &device,
@@ -378,9 +382,9 @@ mod tests {
     #[test]
     fn test_color_jitter_preserves_shape_batch() {
         let device = Device::default();
-        let jitter = ColorJitter::<B>::new(0.3, 0.3, 0.3);
+        let jitter = ColorJitter::new(0.3, 0.3, 0.3);
 
-        let input = Tensor::<B, 4>::random(
+        let input = Tensor::<4>::random(
             Shape::new([16, 3, 64, 64]),
             burn::tensor::Distribution::Uniform(0.0, 1.0),
             &device,
@@ -394,9 +398,9 @@ mod tests {
     #[test]
     fn test_color_jitter_values_in_range() {
         let device = Device::default();
-        let jitter = ColorJitter::<B>::new(0.5, 0.5, 0.5);
+        let jitter = ColorJitter::new(0.5, 0.5, 0.5);
 
-        let input = Tensor::<B, 4>::random(
+        let input = Tensor::<4>::random(
             Shape::new([2, 3, 8, 8]),
             burn::tensor::Distribution::Uniform(0.0, 1.0),
             &device,
@@ -416,10 +420,10 @@ mod tests {
     #[test]
     fn test_color_jitter_different_input_shapes() {
         let device = Device::default();
-        let jitter = ColorJitter::<B>::new(0.3, 0.3, 0.3);
+        let jitter = ColorJitter::new(0.3, 0.3, 0.3);
 
         // Test with non-square images
-        let input = Tensor::<B, 4>::random(
+        let input = Tensor::<4>::random(
             Shape::new([2, 3, 64, 128]),
             burn::tensor::Distribution::Uniform(0.0, 1.0),
             &device,
@@ -429,7 +433,7 @@ mod tests {
         assert_eq!(output.shape(), Shape::new([2, 3, 64, 128]));
 
         // Test with single pixel
-        let input_small = Tensor::<B, 4>::ones(Shape::new([1, 3, 1, 1]), &device);
+        let input_small = Tensor::<4>::ones(Shape::new([1, 3, 1, 1]), &device);
         let output_small = jitter.execute(input_small);
         assert_eq!(output_small.shape(), Shape::new([1, 3, 1, 1]));
     }
@@ -441,10 +445,10 @@ mod tests {
     #[test]
     fn test_random_grayscale_probability_one_always_grayscales() {
         let device = Device::default();
-        let gray = RandomGrayscale::<B>::new(1.0);
+        let gray = RandomGrayscale::new(1.0);
 
         // Input with different channel values
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(
                 vec![
                     1.0f32, 2.0, // Channel 0 (R)
@@ -495,9 +499,9 @@ mod tests {
     #[test]
     fn test_random_grayscale_probability_zero_never_grayscales() {
         let device = Device::default();
-        let gray = RandomGrayscale::<B>::new(0.0);
+        let gray = RandomGrayscale::new(0.0);
 
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(
                 vec![
                     1.0f32, 2.0, // Channel 0

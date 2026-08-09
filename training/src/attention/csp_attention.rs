@@ -1,8 +1,10 @@
+
 use burn::{
+    backend::Backend,
     config::Config,
     module::Module,
     nn::{Linear, LinearConfig},
-    tensor::{Int, Tensor, TensorData, backend::Backend},
+    tensor::{Device, Int, Tensor, TensorData},
 };
 
 /// CSP attention implementation according to https://arxiv.org/pdf/2410.10914
@@ -16,19 +18,21 @@ pub struct CspConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct Csp<B: Backend> {
-    v_proj: Linear<B>,
-    out_proj: Linear<B>,
+pub struct Csp {
+    v_proj: Linear,
+    out_proj: Linear,
 
-    shift_idx: Tensor<B, 3, Int>,
+    shift_idx: Tensor<3, Int>,
+    
 
     d_model: usize,
     seq_length: usize,
     group_size: usize,
     temperature: f32,
+    
 }
 
-fn build_shift_idx<B: Backend>(seq_length: usize, d_model: usize) -> Tensor<B, 3, Int> {
+fn build_shift_idx(seq_length: usize, d_model: usize) -> Tensor<3, Int> {
     let mut idx = Vec::with_capacity(seq_length * d_model);
 
     for t in 0..seq_length {
@@ -39,11 +43,11 @@ fn build_shift_idx<B: Backend>(seq_length: usize, d_model: usize) -> Tensor<B, 3
     }
 
     let data = TensorData::new(idx, &[1, d_model, seq_length]);
-    Tensor::<B, 3, Int>::from(data)
+    Tensor::<3, Int>::from(data)
 }
 
 impl CspConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> Csp<B> {
+    pub fn init(&self, device: &Device) -> Csp {
         assert!(self.d_model > 0, "d_model must be > 0");
         assert!(self.seq_length > 0, "seq_len must be > 0");
         assert!(self.group_size > 0, "group_size must be > 0");
@@ -63,8 +67,8 @@ impl CspConfig {
     }
 }
 
-impl<B: Backend> Csp<B> {
-    fn pad_tokens(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl Csp {
+    fn pad_tokens(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, d] = x.dims();
         let remainder = n % self.group_size;
         if remainder == 0 {
@@ -72,7 +76,7 @@ impl<B: Backend> Csp<B> {
         }
 
         let pad = self.group_size - remainder;
-        let zeros = Tensor::<B, 3>::zeros([b, pad, d], &x.device());
+        let zeros = Tensor::<3>::zeros([b, pad, d], &x.device());
         let padded = Tensor::cat(vec![x, zeros], 1);
         padded
     }
@@ -82,7 +86,7 @@ impl<B: Backend> Csp<B> {
     /// and don't change after that.
     /// Input:  [B, N, D]
     /// Output: [B, N, D]
-    fn channelwise_shift(&self, v: Tensor<B, 3>) -> Tensor<B, 3> {
+    fn channelwise_shift(&self, v: Tensor<3>) -> Tensor<3> {
         let b = v.dims()[0];
 
         let idx = self
@@ -96,7 +100,7 @@ impl<B: Backend> Csp<B> {
     /// Apply a gsort operator from the paper.
     /// Input: [B, N, D]
     /// Output: [B, N, D]
-    fn gsort_operator(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    fn gsort_operator(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, d] = x.dims();
         let g = n / self.group_size;
         // [B, d, group_size, num_groups]
@@ -108,7 +112,7 @@ impl<B: Backend> Csp<B> {
             .reshape([b as i64, -1, d as i64])
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, d] = x.dims();
         debug_assert_eq!(d, self.d_model, "input dim must match d_model");
 

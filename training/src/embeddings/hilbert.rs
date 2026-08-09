@@ -1,11 +1,14 @@
+
 use burn::{
     config::Config,
     module::Module,
+    backend::Backend,
     nn::{
         Linear, LinearConfig,
         conv::{Conv2d, Conv2dConfig},
     },
-    tensor::{Int, Tensor, TensorData, backend::Backend, module::adaptive_avg_pool1d},
+    
+tensor::{Device, Int, Tensor, TensorData, module::adaptive_avg_pool1d},
 };
 
 use crate::curves::SpaceCurve;
@@ -27,12 +30,13 @@ use crate::curves::SpaceCurve;
 /// - global structure
 /// - transformer-compatible fixed length
 #[derive(Module, Debug)]
-pub struct RecursiveHilbertTokenizer<B: Backend> {
-    patch_conv: Conv2d<B>,
-    token_proj: Linear<B>,
+pub struct RecursiveHilbertTokenizer {
+    patch_conv: Conv2d,
+    token_proj: Linear,
     curve: SpaceCurve,
     levels: usize,
     target_tokens: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -46,7 +50,7 @@ pub struct RecursiveHilbertTokenizerConfig {
 }
 
 impl RecursiveHilbertTokenizerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> RecursiveHilbertTokenizer<B> {
+    pub fn init(&self, device: &Device) -> RecursiveHilbertTokenizer {
         RecursiveHilbertTokenizer {
             patch_conv: Conv2dConfig::new(
                 [self.in_channels, self.embed_dim],
@@ -65,13 +69,13 @@ impl RecursiveHilbertTokenizerConfig {
     }
 }
 
-impl<B: Backend> RecursiveHilbertTokenizer<B> {
+impl RecursiveHilbertTokenizer {
     /// Input:
     /// [B, C, H, W]
     ///
     /// Output:
     /// [B, target_tokens, E]
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 3> {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<3> {
         // --------------------------------------------------
         // STEP 1: Fine patch extraction
         // [B, E, H_p, W_p]
@@ -94,14 +98,14 @@ impl<B: Backend> RecursiveHilbertTokenizer<B> {
 
         let indices_data = TensorData::new(from_curve.clone(), [from_curve.len()]);
 
-        let indices = Tensor::<B, 1, Int>::from_data(indices_data, &device);
+        let indices = Tensor::<1, Int>::from_data(indices_data, &device);
 
         let mut current = x.select(1, indices);
 
         // --------------------------------------------------
         // STEP 4: Recursive hierarchy
         // --------------------------------------------------
-        let mut all_levels: Vec<Tensor<B, 3>> = vec![current.clone()];
+        let mut all_levels: Vec<Tensor<3>> = vec![current.clone()];
 
         for _ in 1..self.levels {
             let [b, n, e] = current.dims();

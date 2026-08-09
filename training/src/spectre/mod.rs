@@ -1,8 +1,10 @@
+
 use burn::{
+    backend::Backend,
     Tensor,
     config::Config,
     module::Module,
-    tensor::{backend::Backend, ops::PadMode, s},
+    tensor::{Device, ops::PadMode, s},
 };
 
 use crate::spectre::transform::SpectralTransform;
@@ -11,13 +13,14 @@ pub mod layers;
 pub mod transform;
 
 #[derive(Module, Debug)]
-pub struct SpectralCompressor<B: Backend> {
-    forward_xform: Tensor<B, 2>,
-    inverse_xform: Tensor<B, 2>,
+pub struct SpectralCompressor {
+    forward_xform: Tensor<2>,
+    inverse_xform: Tensor<2>,
+    
 }
 
-impl<B: Backend> SpectralCompressor<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 4> {
+impl SpectralCompressor {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<4> {
         let [_, _, _, image_size] = images.dims();
 
         // Power-of-two padding
@@ -49,7 +52,7 @@ pub struct SpectralCompressConfig {
 }
 
 impl SpectralCompressConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SpectralCompressor<B> {
+    pub fn init(&self, device: &Device) -> SpectralCompressor {
         SpectralCompressor {
             forward_xform: self
                 .spectral

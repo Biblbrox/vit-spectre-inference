@@ -1,4 +1,4 @@
-use burn::{module::Module, tensor::backend::Backend};
+use burn::{module::Module, tensor::Device};
 use fastrand::Rng;
 
 use crate::{
@@ -75,11 +75,11 @@ pub fn sample_beta(rng: &mut Rng, alpha: f64, beta: f64) -> f64 {
     x / (x + y)
 }
 
-pub fn print_model_info<B: Backend>(
+pub fn print_model_info(
     shared: SharedConfig,
     dataset_cfg: DatasetConfig,
-    device: B::Device,
-    model: impl ModelConfig<B>,
+    device: Device,
+    model: impl ModelConfig,
 ) {
     let train_config = TrainConfig {
         in_channels: dataset_cfg.in_channels,

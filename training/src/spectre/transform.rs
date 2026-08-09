@@ -3,7 +3,8 @@ use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI, SQRT_2, TAU};
 use burn::serde::{Deserialize, Serialize};
 
 use burn::tensor::Tensor;
-use burn::tensor::backend::Backend;
+use burn::backend::Backend;
+use burn::tensor::Device;
 
 /// Normalised DCT-II matrix [n, n].
 /// Row k is the k-th orthonormal DCT-II basis vector.
@@ -57,7 +58,7 @@ pub enum SpectralTransform {
 }
 
 impl SpectralTransform {
-    pub fn xform<B: Backend>(&self, order: usize, device: &B::Device) -> Tensor<B, 2> {
+    pub fn xform(&self, order: usize, device: &Device) -> Tensor<2> {
         match self {
             SpectralTransform::Hadamard => Self::hadamard(order, device),
             SpectralTransform::Hartley => Self::hartley(order, device),
@@ -67,7 +68,7 @@ impl SpectralTransform {
         }
     }
 
-    fn hadamard<B: Backend>(order: usize, device: &B::Device) -> Tensor<B, 2> {
+    fn hadamard(order: usize, device: &Device) -> Tensor<2> {
         if order == 0 {
             return Tensor::ones([1, 1], device);
         }
@@ -85,7 +86,7 @@ impl SpectralTransform {
         x.mul_scalar(FRAC_1_SQRT_2.powi(order as i32))
     }
 
-    fn hartley<B: Backend>(order: usize, device: &B::Device) -> Tensor<B, 2> {
+    fn hartley(order: usize, device: &Device) -> Tensor<2> {
         if order == 0 {
             return Tensor::ones([1, 1], device);
         }
@@ -105,7 +106,7 @@ impl SpectralTransform {
         x.div_scalar(n.isqrt() as f32)
     }
 
-    fn cosine<B: Backend>(order: usize, device: &B::Device) -> Tensor<B, 2> {
+    fn cosine(order: usize, device: &Device) -> Tensor<2> {
         if order == 0 {
             return Tensor::ones([1, 1], device);
         }
@@ -122,13 +123,13 @@ impl SpectralTransform {
             }
         }
 
-        let x = Tensor::<B, 1>::from_floats(container.as_slice(), device);
+        let x = Tensor::<1>::from_floats(container.as_slice(), device);
         let x = x.reshape([n, n]);
 
         x.div_scalar(n.isqrt() as f32)
     }
 
-    fn sine<B: Backend>(order: usize, device: &B::Device) -> Tensor<B, 2> {
+    fn sine(order: usize, device: &Device) -> Tensor<2> {
         if order == 0 {
             return Tensor::ones([1, 1], device);
         }

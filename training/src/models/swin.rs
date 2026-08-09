@@ -6,7 +6,7 @@ use burn::{
         Dropout, DropoutConfig, Gelu, Linear, LinearConfig,
         conv::{Conv1d, Conv1dConfig},
     },
-    tensor::{Distribution, Int, activation::softmax},
+    tensor::{Device, Distribution, Int, activation::softmax},
 };
 
 use crate::kernels::Backend;
@@ -21,15 +21,16 @@ use crate::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Module, Debug)]
-pub struct WindowAttention<B: Backend> {
-    qkv: Linear<B>,
+pub struct WindowAttention {
+    qkv: Linear,
     attn_drop: Dropout,
-    proj: Linear<B>,
+    proj: Linear,
     proj_drop: Dropout,
-    relative_position_bias_table: Param<Tensor<B, 2>>,
-    relative_position_index: Tensor<B, 2, Int>,
+    relative_position_bias_table: Param<Tensor<2>>,
+    relative_position_index: Tensor<2, Int>,
     window_size: usize,
     num_heads: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -40,8 +41,8 @@ pub struct WindowAttentionConfig {
     dropout: f64,
 }
 
-impl<B: Backend> WindowAttention<B> {
-    pub fn forward(&self, x: Tensor<B, 3>, mask: Option<Tensor<B, 3>>) -> Tensor<B, 3> {
+impl WindowAttention {
+    pub fn forward(&self, x: Tensor<3>, mask: Option<Tensor<3>>) -> Tensor<3> {
         let [b, n, _] = x.dims();
         let h = self.num_heads;
         let head_dim = self.relative_position_bias_table.val().dims()[1];
@@ -107,13 +108,13 @@ impl<B: Backend> WindowAttention<B> {
 }
 
 impl WindowAttentionConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> WindowAttention<B> {
+    pub fn init(&self, device: &Device) -> WindowAttention {
         let n = self.window_size.pow(2);
         let h = self.num_heads;
 
         // Build relative position index
-        let coords_h = Tensor::<B, 1, Int>::arange(0..self.window_size as i64, device);
-        let coords_w = Tensor::<B, 1, Int>::arange(0..self.window_size as i64, device);
+        let coords_h = Tensor::<1, Int>::arange(0..self.window_size as i64, device);
+        let coords_w = Tensor::<1, Int>::arange(0..self.window_size as i64, device);
 
         let coords_h = coords_h.unsqueeze_dim(1).repeat_dim(1, self.window_size);
         let coords_w = coords_w.unsqueeze_dim(0).repeat_dim(0, self.window_size);
@@ -134,7 +135,7 @@ impl WindowAttentionConfig {
         let relative_position_index = (slice_h + slice_w).squeeze_dim(2);
 
         // Initialize relative position bias table [2*Wh-1 * 2*Ww-1, H]
-        let bias_table = Tensor::<B, 2>::random(
+        let bias_table = Tensor::<2>::random(
             [(2 * self.window_size - 1) * (2 * self.window_size - 1), h],
             Distribution::Normal(0.0, 0.1),
             device,
@@ -158,16 +159,17 @@ impl WindowAttentionConfig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Module, Debug)]
-pub struct SwinBlock<B: Backend> {
-    attn: WindowAttention<B>,
-    mlp_linear1: Linear<B>,
-    mlp_linear2: Linear<B>,
-    norm1: DynamicERF<B>,
-    norm2: DynamicERF<B>,
+pub struct SwinBlock {
+    attn: WindowAttention,
+    mlp_linear1: Linear,
+    mlp_linear2: Linear,
+    norm1: DynamicERF,
+    norm2: DynamicERF,
     dropout: Dropout,
     activation: Gelu,
     window_size: usize,
     shift_size: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -180,8 +182,8 @@ pub struct SwinBlockConfig {
     dropout: f64,
 }
 
-impl<B: Backend> SwinBlock<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl SwinBlock {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let h = (n as f64).sqrt() as usize;
         let w = h;
@@ -231,7 +233,7 @@ impl<B: Backend> SwinBlock<B> {
         x_res + x
     }
 
-    fn partition_windows(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    fn partition_windows(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let h = (n as f64).sqrt() as usize;
         let w = h;
@@ -242,7 +244,7 @@ impl<B: Backend> SwinBlock<B> {
         x.reshape([b * (h / ws) * (w / ws), ws * ws, e])
     }
 
-    fn reverse_windows(&self, x: Tensor<B, 3>, h: usize, w: usize) -> Tensor<B, 3> {
+    fn reverse_windows(&self, x: Tensor<3>, h: usize, w: usize) -> Tensor<3> {
         let [b_windows, ws2, e] = x.dims();
         let b = b_windows / ((h / self.window_size) * (w / self.window_size));
         let ws = self.window_size;
@@ -254,7 +256,7 @@ impl<B: Backend> SwinBlock<B> {
 }
 
 impl SwinBlockConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SwinBlock<B> {
+    pub fn init(&self, device: &Device) -> SwinBlock {
         SwinBlock {
             attn: WindowAttentionConfig::new(
                 self.embed_dim,
@@ -280,11 +282,12 @@ impl SwinBlockConfig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Module, Debug)]
-pub struct PatchMerging<B: Backend> {
-    norm: DynamicERF<B>,
-    linear: Linear<B>,
+pub struct PatchMerging {
+    norm: DynamicERF,
+    linear: Linear,
     in_h: usize,
     in_w: usize,
+    
 }
 
 #[derive(Config, Debug)]
@@ -295,8 +298,8 @@ pub struct PatchMergingConfig {
     in_w: usize,
 }
 
-impl<B: Backend> PatchMerging<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl PatchMerging {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
 
         // Reshape to 2D grid
@@ -328,7 +331,7 @@ impl<B: Backend> PatchMerging<B> {
 }
 
 impl PatchMergingConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> PatchMerging<B> {
+    pub fn init(&self, device: &Device) -> PatchMerging {
         PatchMerging {
             norm: DynamicERFConfig::new(self.in_dim, 0.5, 0.0).init(device),
             linear: LinearConfig::new(4 * self.in_dim, self.out_dim).init(device),
@@ -343,15 +346,16 @@ impl PatchMergingConfig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Module, Debug)]
-pub struct SwinEncoder<B: Backend> {
-    stages: Vec<SwinStage<B>>,
-    norm: Option<DynamicERF<B>>,
+pub struct SwinEncoder {
+    stages: Vec<SwinStage>,
+    norm: Option<DynamicERF>,
+    
 }
 
 #[derive(Module, Debug)]
-struct SwinStage<B: Backend> {
-    blocks: Vec<SwinBlock<B>>,
-    downsample: Option<PatchMerging<B>>,
+struct SwinStage {
+    blocks: Vec<SwinBlock>,
+    downsample: Option<PatchMerging>,
 }
 
 #[derive(Config, Debug)]
@@ -365,8 +369,8 @@ pub struct SwinEncoderConfig {
     grid_shapes: Vec<(usize, usize)>,
 }
 
-impl<B: Backend> SwinEncoder<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl SwinEncoder {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let mut output = x;
         for stage in &self.stages {
             output = stage.forward(output);
@@ -380,8 +384,8 @@ impl<B: Backend> SwinEncoder<B> {
     }
 }
 
-impl<B: Backend> SwinStage<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl SwinStage {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let mut output = x;
 
         // Process blocks
@@ -400,7 +404,7 @@ impl<B: Backend> SwinStage<B> {
 }
 
 impl SwinEncoderConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SwinEncoder<B> {
+    pub fn init(&self, device: &Device) -> SwinEncoder {
         let num_stages = self.num_layers.len();
         let mut stages = Vec::new();
 
@@ -453,12 +457,13 @@ impl SwinEncoderConfig {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Module, Debug)]
-pub struct SwinTransformer<B: Backend> {
-    embedding_block: PatchEmbedding<B>,
-    encoder: SwinEncoder<B>,
-    layer_norm: DynamicERF<B>,
-    linear: Linear<B>,
-    tok_proj: Conv1d<B>,
+pub struct SwinTransformer {
+    embedding_block: PatchEmbedding,
+    encoder: SwinEncoder,
+    layer_norm: DynamicERF,
+    linear: Linear,
+    tok_proj: Conv1d,
+    
 }
 
 #[derive(Config, Debug)]
@@ -475,8 +480,8 @@ pub struct SwinTransformerConfig {
     dropout: f64,
 }
 
-impl<B: Backend> SwinTransformer<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 2> {
+impl SwinTransformer {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<2> {
         let x = self.embedding_block.forward(images);
         let x = self.encoder.forward(x);
         let x = self.layer_norm.forward(x);
@@ -487,7 +492,7 @@ impl<B: Backend> SwinTransformer<B> {
 }
 
 impl SwinTransformerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SwinTransformer<B> {
+    pub fn init(&self, device: &Device) -> SwinTransformer {
         let grid_size = self.image_size / self.patch_size;
         let num_patches = grid_size.pow(2);
 
@@ -556,7 +561,7 @@ impl SwinTransformerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::tensor::Shape;
+    use burn::Shape;
 
     const IN_CHANNELS: usize = 3;
     const PATCH_SIZE: usize = 4;
@@ -575,7 +580,7 @@ mod tests {
         type B = burn::backend::cuda::Cuda;
         let device = burn::backend::cuda::CudaDevice::default();
 
-        let test_image = Tensor::<B, 4>::zeros(
+        let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
         );
@@ -609,7 +614,7 @@ mod tests {
         let num_heads = 4;
         let batch_size = 2;
 
-        let x = Tensor::<B, 3>::random(
+        let x = Tensor::<3>::random(
             Shape::new([batch_size, seq_len, embed_dim]),
             Distribution::Normal(0.0, 1.0),
             &device,
@@ -633,7 +638,7 @@ mod tests {
         let batch_size = 2;
         let hidden_dim = 128;
 
-        let x = Tensor::<B, 3>::random(
+        let x = Tensor::<3>::random(
             Shape::new([batch_size, seq_len, embed_dim]),
             Distribution::Normal(0.0, 1.0),
             &device,
@@ -665,7 +670,7 @@ mod tests {
         let batch_size = 2;
         let seq_len = in_h * in_w;
 
-        let x = Tensor::<B, 3>::random(
+        let x = Tensor::<3>::random(
             Shape::new([batch_size, seq_len, in_dim]),
             Distribution::Normal(0.0, 1.0),
             &device,

@@ -1,20 +1,19 @@
 use burn::{
+    backend::Backend,
     Tensor,
     config::Config,
     module::{Module, Param},
     nn::{Linear, LinearConfig},
-    tensor::{
-        activation::{gelu, softmax},
-        backend::Backend,
-    },
+    tensor::activation::{gelu, softmax},
 };
 
 use crate::models::fast_vit::{FastViT, FastViTConfig};
 
 #[derive(Module, Debug)]
-pub struct ProjectionHead<B: Backend> {
-    fc1: Linear<B>,
-    fc2: Linear<B>,
+pub struct ProjectionHead {
+    fc1: Linear,
+    fc2: Linear,
+    
 }
 
 #[derive(Config, Debug)]
@@ -24,7 +23,7 @@ pub struct ProjectionHeadConfig {
 }
 
 impl ProjectionHeadConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> ProjectionHead<B> {
+    pub fn init(&self, device: &Device) -> ProjectionHead {
         ProjectionHead {
             fc1: LinearConfig::new(self.embed_dim, self.embed_dim).init(device),
             fc2: LinearConfig::new(self.embed_dim, self.proto_dim).init(device),
@@ -32,8 +31,8 @@ impl ProjectionHeadConfig {
     }
 }
 
-impl<B: Backend> ProjectionHead<B> {
-    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+impl ProjectionHead {
+    pub fn forward(&self, x: Tensor<2>) -> Tensor<2> {
         let x = gelu(self.fc1.forward(x));
         let x = self.fc2.forward(x);
         let norm = x
@@ -47,25 +46,27 @@ impl<B: Backend> ProjectionHead<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct SelfViTBranch<B: Backend> {
-    pub backbone: FastViT<B>,
-    pub head: ProjectionHead<B>,
+pub struct SelfViTBranch {
+    pub backbone: FastViT,
+    pub head: ProjectionHead,
+    
 }
 
-impl<B: Backend> SelfViTBranch<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 2> {
+impl SelfViTBranch {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<2> {
         self.head.forward(self.backbone.forward(images))
     }
 }
 
 #[derive(Module, Debug)]
-pub struct SelfViT<B: Backend> {
-    pub student: SelfViTBranch<B>,
-    pub teacher: SelfViTBranch<B>,
-    center: Param<Tensor<B, 2>>,
+pub struct SelfViT {
+    pub student: SelfViTBranch,
+    pub teacher: SelfViTBranch,
+    center: Param<Tensor<2>>,
     pub temp_student: f32,
     pub temp_teacher: f32,
     pub center_momentum: f32,
+    
 }
 
 #[derive(Config, Debug)]
@@ -90,7 +91,7 @@ pub struct SelfViTConfig {
 }
 
 impl SelfViTConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> SelfViT<B> {
+    pub fn init(&self, device: &Device) -> SelfViT {
         let backbone_cfg = FastViTConfig::new(
             self.in_channels,
             self.embed_dim,
@@ -113,7 +114,7 @@ impl SelfViTConfig {
         SelfViT {
             student: make_branch(),
             teacher: make_branch(),
-            center: Param::from_tensor(Tensor::<B, 2>::zeros([1, self.proto_dim], device))
+            center: Param::from_tensor(Tensor::<2>::zeros([1, self.proto_dim], device))
                 .set_require_grad(false),
             temp_student: self.temp_student,
             temp_teacher: self.temp_teacher,
@@ -122,15 +123,15 @@ impl SelfViTConfig {
     }
 }
 
-impl<B: Backend> SelfViT<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> (Tensor<B, 2>, Tensor<B, 2>) {
+impl SelfViT {
+    pub fn forward(&self, images: Tensor<4>) -> (Tensor<2>, Tensor<2>) {
         let student_out = self.student.forward(images.clone());
         let teacher_out = self.student.forward(images);
 
         (student_out, teacher_out)
     }
 
-    pub fn update_center(&mut self, teacher_global_mean: Tensor<B, 2>) {
+    pub fn update_center(&mut self, teacher_global_mean: Tensor<2>) {
         let m = self.center_momentum as f64;
         let new_center = self.center.val() * m + teacher_global_mean * (1.0 - m);
         self.center = Param::from_tensor(new_center).set_require_grad(false);

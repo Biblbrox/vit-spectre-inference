@@ -1,7 +1,9 @@
+
 use burn::{
     module::Module,
-    prelude::Tensor,
-    tensor::{Distribution, Int, activation::softmax, backend::Backend},
+    prelude::{Device, Tensor},
+    backend::Backend,
+    tensor::{Distribution, Int, activation::softmax},
 };
 
 use crate::attention::{NormalizationMode, StochasticMul, sinkhorn};
@@ -27,19 +29,20 @@ impl StochasticAttentionStaticConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct StochasticAttentionStatic<B: Backend> {
-    q_idx: Tensor<B, 1, Int>,
-    k_idx: Tensor<B, 1, Int>,
-    v_idx: Tensor<B, 1, Int>,
+pub struct StochasticAttentionStatic {
+    q_idx: Tensor<1, Int>,
+    k_idx: Tensor<1, Int>,
+    v_idx: Tensor<1, Int>,
     inv_scale: f32,
     temperature: f32,
     nhead: usize,
     dk: usize,
     score_mode: StochasticMul,
+    
 }
 
-impl<B: Backend> StochasticAttentionStatic<B> {
-    fn calc_scores(&self, q: Tensor<B, 4>, k: Tensor<B, 4>) -> Tensor<B, 4> {
+impl StochasticAttentionStatic {
+    fn calc_scores(&self, q: Tensor<4>, k: Tensor<4>) -> Tensor<4> {
         // [B,H,N,dk] x [B,H,dk,N] -> [B,H,N,N], all-pairs scores
         let scores = q.matmul(k.transpose()) * self.inv_scale;
         match self.score_mode {
@@ -51,7 +54,7 @@ impl<B: Backend> StochasticAttentionStatic<B> {
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, e] = x.dims();
         let dk = self.dk;
         let h = self.nhead;
@@ -75,13 +78,13 @@ impl<B: Backend> StochasticAttentionStatic<B> {
 }
 
 impl StochasticAttentionStaticConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> StochasticAttentionStatic<B> {
+    pub fn init(&self, device: &Device) -> StochasticAttentionStatic {
         let dk = self.embed_dim / self.nhead;
         let logit_std = (1.0 / dk as f64).sqrt();
 
         //x.clone().select(3, mat.argmax(2).reshape([dk]))
         let init_logits = || {
-            Tensor::<B, 4>::random([1, 1, dk, dk], Distribution::Normal(0.0, logit_std), device)
+            Tensor::<4>::random([1, 1, dk, dk], Distribution::Normal(0.0, logit_std), device)
                 .argmax(2)
                 .reshape([dk])
         };

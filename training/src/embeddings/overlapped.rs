@@ -1,15 +1,16 @@
-use burn::{Tensor, config::Config, module::Module, tensor::backend::Backend};
+use burn::{Tensor, config::Config, module::Module, backend::Backend, tensor::Device};
 
 use crate::conv::{ConvBNAct, ConvBNActConfig};
 
 #[derive(Module, Debug)]
-pub struct PatchEmbeddingOverlapped<B: Backend> {
-    stem: ConvBNAct<B>,
-    proj: ConvBNAct<B>,
+pub struct PatchEmbeddingOverlapped {
+    stem: ConvBNAct,
+    proj: ConvBNAct,
+    
 }
 
-impl<B: Backend> PatchEmbeddingOverlapped<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl PatchEmbeddingOverlapped {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let x = self.stem.forward(x);
         self.proj.forward(x)
     }
@@ -30,7 +31,7 @@ pub struct PatchEmbeddingOverlappedConfig {
 }
 
 impl PatchEmbeddingOverlappedConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> PatchEmbeddingOverlapped<B> {
+    pub fn init(&self, device: &Device) -> PatchEmbeddingOverlapped {
         PatchEmbeddingOverlapped {
             stem: ConvBNActConfig::new(self.in_channels, self.out_channels, self.stem_kernel)
                 .with_stride(self.stem_stride)
@@ -61,9 +62,9 @@ mod tests {
             .with_proj_kernel(3)
             .with_proj_stride(2);
 
-        let model = cfg.init::<B>(&device);
+        let model = cfg.init(&device);
 
-        let x = Tensor::<B, 4>::zeros([2, 3, 224, 224], &device);
+        let x = Tensor::<4>::zeros([2, 3, 224, 224], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, 64, 56, 56]);

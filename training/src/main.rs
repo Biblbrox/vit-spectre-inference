@@ -2,7 +2,8 @@
 
 use std::{fs::File, io::Write, panic, path::PathBuf};
 
-use burn::tensor::backend::Backend;
+use burn::backend::{Autodiff, Backend, Dispatch};
+use burn::tensor::Device;
 use lightmix::models::efficientvit::EfficientViTConfig;
 use lightmix::models::fast_vit::FastViTConfig;
 use lightmix::models::fast_vit3d::FastViT3DConfig;
@@ -17,6 +18,9 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+type MyBackend = Dispatch;
+type MyAutodiffBackend = Autodiff<MyBackend>;
+
 macro_rules! info_for_model {
     (
         $model_name:expr,
@@ -30,7 +34,7 @@ macro_rules! info_for_model {
             $(
                 name if name.starts_with($prefix) => {
                     let model_cfg: $config_type = $model_table.try_into().unwrap();
-                    print_model_info::<B>($shared, $dataset_cfg, $device, model_cfg);
+                    print_model_info($shared, $dataset_cfg, $device, model_cfg);
                 }
             )*
             _ => panic!("Unknown model: {}", $model_name),
@@ -38,7 +42,7 @@ macro_rules! info_for_model {
     };
 }
 
-pub fn run_info<B: Backend>(config: ParsedConfig, device: B::Device) {
+pub fn run_info(config: ParsedConfig, device: Device) {
     let ParsedConfig {
         shared,
         dataset: dataset_cfg,
@@ -60,8 +64,8 @@ pub fn run_info<B: Backend>(config: ParsedConfig, device: B::Device) {
 }
 
 fn main() {
-    type MyBackend = burn::backend::cuda::Cuda<f32, i32>;
-    let device = burn::backend::cuda::CudaDevice::default();
+    let device = Device::cuda(0);
+    let autodiff_device = device.clone().autodiff();
 
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../configs");
     let localpath = config_dir.join("experiments.local.toml");
@@ -85,8 +89,8 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "train".to_string());
     match command.as_str() {
-        "info" => run_info::<MyBackend>(config, device),
-        "train" => run_experiment::<MyBackend>(config, device),
+        "info" => run_info(config, device),
+        "train" => run_experiment(config, device, autodiff_device),
         other => eprintln!("Unknown command: '{other}' (expected 'train' or 'info')"),
     }
 }

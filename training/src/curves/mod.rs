@@ -1,10 +1,33 @@
-use burn::config::Config;
+use burn::{
+    config::Config,
+    module::{AutodiffModule, Module, ModuleDisplay, ModuleDisplayDefault},
+    tensor::Device,
+};
 
 #[derive(Config, Debug, Copy, PartialEq)]
 pub enum SpaceCurve {
     Hilbert,
     ZOrder,
 }
+
+impl Module for SpaceCurve {
+    fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
+    fn to_device(self, _: &Device) -> Self { self }
+    fn fork(self, _: &Device) -> Self { self }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+}
+
+impl AutodiffModule for SpaceCurve {
+    fn valid(&self) -> Self { *self }
+    fn from_inner(module: Self) -> Self { module }
+}
+
+impl ModuleDisplayDefault for SpaceCurve {
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+}
+
+impl ModuleDisplay for SpaceCurve {}
 
 fn invert_permutation(perm: &[i32]) -> Vec<i32> {
     let mut inv = vec![0i32; perm.len()];

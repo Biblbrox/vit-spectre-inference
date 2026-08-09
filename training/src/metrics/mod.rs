@@ -1,79 +1,82 @@
-use std::marker::PhantomData;
-
 use burn::Tensor;
 use burn::tensor::Int;
-use burn::tensor::backend::Backend;
 use burn::train::ClassificationOutput;
 use burn::train::logger::MetricLogger;
 use burn::train::metric::store::{MetricsUpdate, NumericMetricUpdate, Split};
 use burn::train::metric::{
     Metric, MetricDefinition, MetricEntry, MetricId, MetricMetadata, Numeric, NumericEntry,
 };
-use burn::train::renderer::{
-    MetricState, MetricsRenderer, MetricsRendererTraining, ProgressType, TrainingProgress,
-};
+use burn::train::renderer::{MetricState, MetricsRenderer, MetricsRendererTraining};
 
 pub mod batchtime;
 pub mod throughput;
 
-// This trait should be implemented once per speciefic output type (classification and so on)
-pub trait MetricOutput<B: Backend> {
-    fn loss(&self) -> Tensor<B, 1>;
-    fn output(&self) -> Tensor<B, 2>; // logits / class scores
-    fn targets(&self) -> Tensor<B, 1, Int>;
+// This trait should be implemented once per specific output type (classification and so on)
+pub trait MetricOutput {
+    fn loss(&self) -> Tensor<1>;
+    fn output(&self) -> Tensor<2>; // logits / class scores
+    fn targets(&self) -> Tensor<1, Int>;
 }
 
-impl<B: Backend> MetricOutput<B> for ClassificationOutput<B> {
-    fn loss(&self) -> Tensor<B, 1> {
+impl MetricOutput for ClassificationOutput {
+    fn loss(&self) -> Tensor<1> {
         self.loss.clone()
     }
-    fn output(&self) -> Tensor<B, 2> {
+    fn output(&self) -> Tensor<2> {
         self.output.clone()
     }
-    fn targets(&self) -> Tensor<B, 1, Int> {
+    fn targets(&self) -> Tensor<1, Int> {
         self.targets.clone()
     }
 }
 
-// The goal of this trait is to wrap metric into a trait without explicit InputType
-// to make it possible to use in vec!. Sadly, Metric trait doesn't allow this =((
-pub trait ErasedMetric<B: Backend> {
+pub struct MetricsHandler {
+    metrics: Vec<Box<dyn MetricUpdater>>,
+}
+
+trait MetricUpdater: Send + Sync {
     fn update(
         &mut self,
-        output: &dyn MetricOutput<B>,
+        output: &dyn MetricOutput,
         metadata: &MetricMetadata,
     ) -> (MetricEntry, NumericEntry, NumericEntry);
     fn clear(&mut self);
     fn definition(&self) -> MetricDefinition;
 }
 
-struct WrappedMetric<M, B, F>
-where
-    M: Metric + Numeric,
-    B: Backend,
-    F: Fn(&dyn MetricOutput<B>) -> M::Input,
-{
+/// Pairs a concrete `Metric` with the closure that knows how to pull its
+/// specific `Input` type out of the type-erased model output. This is the
+/// piece that lets `MetricsHandler::add()` accept metrics with different
+/// `Metric::Input` types into the same `Vec<Box<dyn MetricUpdater>>`.
+struct MetricWrapper<M: Metric> {
     metric: M,
-    extractor: F,
-    _backend: PhantomData<B>,
+    extractor: Box<dyn Fn(&dyn MetricOutput) -> M::Input + Send + Sync>,
 }
 
-impl<M, B, F> ErasedMetric<B> for WrappedMetric<M, B, F>
+impl<M> MetricUpdater for MetricWrapper<M>
 where
-    M: Metric + Numeric,
-    B: Backend,
-    F: Fn(&dyn MetricOutput<B>) -> M::Input,
+    M: Metric + Numeric + Send + Sync + 'static,
 {
     fn update(
         &mut self,
-        output: &dyn MetricOutput<B>,
+        output: &dyn MetricOutput,
         metadata: &MetricMetadata,
     ) -> (MetricEntry, NumericEntry, NumericEntry) {
         let input = (self.extractor)(output);
+
+        // `Metric::update` returns a `SerializedEntry` (display + persistence
+        // strings only) in 0.22.0-pre.1 — it no longer carries a raw numeric
+        // value. The actual live value comes from the separate `Numeric`
+        // trait via `.value()` / `.running_value()`.
         let serialized = self.metric.update(&input, metadata);
         let entry = MetricEntry::new(MetricId::new(self.metric.name()), serialized);
-        let numeric_entry = self.metric.value();
-        let running_entry = self.metric.running_value();
+
+        let numeric_entry = self.metric.value().unwrap_or(NumericEntry::Value(0.0));
+        let running_entry = self
+            .metric
+            .running_value()
+            .unwrap_or(NumericEntry::Value(0.0));
+
         (entry, numeric_entry, running_entry)
     }
 
@@ -86,17 +89,13 @@ where
     }
 }
 
-pub struct MetricsHandler<B: Backend> {
-    metrics: Vec<Box<dyn ErasedMetric<B>>>,
-}
-
-impl<B: Backend> Default for MetricsHandler<B> {
+impl Default for MetricsHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<B: Backend> MetricsHandler<B> {
+impl MetricsHandler {
     pub fn new() -> Self {
         Self { metrics: vec![] }
     }
@@ -104,7 +103,7 @@ impl<B: Backend> MetricsHandler<B> {
     pub fn metric_names(&self) -> Vec<String> {
         self.metrics
             .iter()
-            .map(|m| m.definition().name.clone())
+            .map(|m| m.definition().name.to_string())
             .collect()
     }
 
@@ -112,16 +111,16 @@ impl<B: Backend> MetricsHandler<B> {
         self.metrics.iter().map(|m| m.definition()).collect()
     }
 
-    /// Builder-style: chain .add() calls for each metric
+    /// Builder-style: chain .add() calls for each metric, pairing it with
+    /// the closure that extracts its Input from the type-erased output.
     pub fn add<M, F>(mut self, metric: M, extractor: F) -> Self
     where
-        M: Metric + Numeric + 'static,
-        F: Fn(&dyn MetricOutput<B>) -> M::Input + 'static,
+        M: Metric + Numeric + Send + Sync + 'static,
+        F: Fn(&dyn MetricOutput) -> M::Input + Send + Sync + 'static,
     {
-        self.metrics.push(Box::new(WrappedMetric {
+        self.metrics.push(Box::new(MetricWrapper {
             metric,
-            extractor,
-            _backend: PhantomData,
+            extractor: Box::new(extractor),
         }));
         self
     }
@@ -138,47 +137,26 @@ impl<B: Backend> MetricsHandler<B> {
         }
     }
 
-    pub fn render(
-        &mut self,
-        renderer: &mut impl MetricsRendererTraining,
-        metadata: &MetricMetadata,
-        split: Split,
-    ) {
-        let progress = metadata.progress.clone();
-        let global_progress = metadata.global_progress.clone();
-        let training_progress = TrainingProgress {
-            progress: Some(progress.clone()),
-            global_progress: global_progress.clone(),
-            iteration: Some(progress.items_processed - 1),
-        };
-        let progress_types = vec![
-            ProgressType::Detailed {
-                tag: "Iteration".to_string(),
-                progress: progress.clone(),
-            },
-            ProgressType::Value {
-                tag: "Epoch".to_string(),
-                value: global_progress.items_processed,
-            },
-        ];
-
-        let render_fn = match split {
-            Split::Train => MetricsRendererTraining::render_train,
-            Split::Valid => MetricsRendererTraining::render_valid,
-            Split::Test(_) => unimplemented!("Test case is not implemented for now"),
-        };
-        render_fn(renderer, training_progress, progress_types);
-    }
-
+    /// Updates metric values and pushes them to the renderer + logger.
+    ///
+    /// `epoch` is taken as an explicit parameter since `MetricMetadata` no
+    /// longer carries epoch-level info in 0.22.0-pre.1 (only per-iteration
+    /// `progress`, `iteration`, `lr`) — pass the training loop's real epoch
+    /// counter here. This intentionally does NOT touch progress-bar
+    /// rendering anymore: that's driven separately by the training loop
+    /// calling `TrainingProgressLogger` methods (`start`/`start_split`/
+    /// `update_split`/`end_split`/`update_epoch`/`end`) directly on the
+    /// renderer, since that trait was removed from `MetricsRendererTraining`
+    /// in this version.
     pub fn update(
         &mut self,
-        output: &dyn MetricOutput<B>,
+        output: &dyn MetricOutput,
         metadata: &MetricMetadata,
+        epoch: usize,
         renderer: &mut impl MetricsRendererTraining,
         logger: &mut impl MetricLogger,
         split: Split,
     ) {
-        let epoch = metadata.global_progress.items_processed;
         let (states, updates) = self.compute(output, metadata);
         for state in states {
             match split {
@@ -192,7 +170,7 @@ impl<B: Backend> MetricsHandler<B> {
 
     fn compute(
         &mut self,
-        output: &dyn MetricOutput<B>,
+        output: &dyn MetricOutput,
         metadata: &MetricMetadata,
     ) -> (Vec<MetricState>, Vec<NumericMetricUpdate>) {
         let mut states = vec![];
@@ -201,12 +179,15 @@ impl<B: Backend> MetricsHandler<B> {
         for metric in &mut self.metrics {
             let (entry, numeric_entry, running_entry) = metric.update(output, metadata);
 
-            states.push(MetricState::Numeric(entry.clone(), numeric_entry.clone()));
-            updates.push(NumericMetricUpdate::new(
-                entry,
-                numeric_entry, // current iteration value
-                running_entry, // epoch running mean
+            states.push(MetricState::Numeric(
+                entry.clone(),
+                Some(numeric_entry.clone()),
             ));
+            updates.push(NumericMetricUpdate {
+                entry,
+                numeric_entry: Some(numeric_entry),
+                running_entry: Some(running_entry),
+            });
         }
 
         (states, updates)

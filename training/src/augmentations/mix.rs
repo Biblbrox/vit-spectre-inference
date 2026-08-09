@@ -1,15 +1,18 @@
+
 use burn::{
-    prelude::Tensor,
-    tensor::{Int, backend::Backend},
+    backend::Backend,
+    prelude::{Device, Tensor},
+    tensor::Int,
 };
 
 use crate::utils::sample_beta;
 
-pub struct CutMixOutput<B: Backend> {
-    pub images: Tensor<B, 4>,
-    pub labels_a: Tensor<B, 1, Int>,
-    pub labels_b: Tensor<B, 1, Int>,
+pub struct CutMixOutput {
+    pub images: Tensor<4>,
+    pub labels_a: Tensor<1, Int>,
+    pub labels_b: Tensor<1, Int>,
     pub lambda: f32,
+    
 }
 
 /// CutMix (Yun et al. 2019).
@@ -22,11 +25,11 @@ impl CutMix {
         Self { alpha }
     }
 
-    pub fn apply<B: Backend>(
+    pub fn apply(
         &self,
-        images: Tensor<B, 4>,
-        labels: Tensor<B, 1, Int>,
-    ) -> CutMixOutput<B> {
+        images: Tensor<4>,
+        labels: Tensor<1, Int>,
+    ) -> CutMixOutput {
         let mut rng = fastrand::Rng::new();
         let [b, c, h, w] = [
             images.dims()[0],
@@ -61,7 +64,7 @@ impl CutMix {
             }
             idx
         };
-        let perm = Tensor::<B, 1, Int>::from_ints(shuffled_idx.as_slice(), &device);
+        let perm = Tensor::<1, Int>::from_ints(shuffled_idx.as_slice(), &device);
 
         // Shuffled batch
         let images_b = images.clone().select(0, perm.clone());
@@ -79,7 +82,7 @@ impl CutMix {
                 }
             }
         }
-        let mask = Tensor::<B, 1>::from_floats(mask_data.as_slice(), &device).reshape([b, c, h, w]);
+        let mask = Tensor::<1>::from_floats(mask_data.as_slice(), &device).reshape([b, c, h, w]);
 
         // mixed = images_a * mask + images_b * (1 - mask)
         let mixed = images.clone() * mask.clone() + images_b * (mask.neg() + 1.0);
@@ -93,11 +96,12 @@ impl CutMix {
     }
 }
 
-pub struct MixUpOutput<B: Backend> {
-    pub images: Tensor<B, 4>,
-    pub labels_a: Tensor<B, 1, Int>,
-    pub labels_b: Tensor<B, 1, Int>,
+pub struct MixUpOutput {
+    pub images: Tensor<4>,
+    pub labels_a: Tensor<1, Int>,
+    pub labels_b: Tensor<1, Int>,
     pub lambda: f32,
+    
 }
 
 pub struct MixUp {
@@ -109,11 +113,11 @@ impl MixUp {
         Self { alpha }
     }
 
-    pub fn apply<B: Backend>(
+    pub fn apply(
         &self,
-        images: Tensor<B, 4>,
-        labels: Tensor<B, 1, Int>,
-    ) -> MixUpOutput<B> {
+        images: Tensor<4>,
+        labels: Tensor<1, Int>,
+    ) -> MixUpOutput {
         let mut rng = fastrand::Rng::new();
         let b = images.dims()[0];
         let device = images.device();
@@ -128,7 +132,7 @@ impl MixUp {
             }
             idx
         };
-        let perm = Tensor::<B, 1, Int>::from_ints(shuffled_idx.as_slice(), &device);
+        let perm = Tensor::<1, Int>::from_ints(shuffled_idx.as_slice(), &device);
 
         let images_b = images.clone().select(0, perm.clone());
         let labels_b = labels.clone().select(0, perm);

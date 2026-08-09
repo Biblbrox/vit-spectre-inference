@@ -1,22 +1,24 @@
+
 pub mod modelnet40;
 
 use std::sync::Arc;
 
 use burn::tensor::{DType, Int, Shape, TensorData};
-use burn::{prelude::Tensor, tensor::backend::Backend};
+use burn::{prelude::{Device, Tensor}, backend::Backend};
 use polars::prelude::*;
 
 use crate::augmentations::Pipeline;
 
-/// Unified batch struct. Data stored as a flat Tensor<B, 1> and reshaped
+/// Unified batch struct. Data stored as a flat Tensor<1> and reshaped
 /// by each model to the appropriate shape.
 #[derive(Clone)]
-pub struct Batch<B: Backend> {
-    pub data: Tensor<B, 1>,
-    pub targets: Tensor<B, 1, Int>,
+pub struct Batch {
+    pub data: Tensor<1>,
+    pub targets: Tensor<1, Int>,
+    
 }
 
-impl<B: Backend> Batch<B> {
+impl Batch {
     pub fn shuffle(&self, seed: u64) -> Self {
         let b = self.targets.dims()[0];
         let device = self.targets.device();
@@ -26,14 +28,14 @@ impl<B: Backend> Batch<B> {
             let j = rng.usize(0..=(i as usize));
             indices.swap(i as usize, j);
         }
-        let idx = Tensor::<B, 1, Int>::from_ints(indices.as_slice(), &device);
+        let idx = Tensor::<1, Int>::from_ints(indices.as_slice(), &device);
         Self {
             data: self.data.clone().select(0, idx.clone()),
             targets: self.targets.clone().select(0, idx),
         }
     }
 
-    pub fn to_device(&self, device: &B::Device) -> Self {
+    pub fn to_device(&self, device: &Device) -> Self {
         Self {
             data: self.data.clone().to_device(device),
             targets: self.targets.clone().to_device(device),
@@ -41,7 +43,7 @@ impl<B: Backend> Batch<B> {
     }
 
     pub fn subbatch(&self, indices: &[usize]) -> Self {
-        let idx_tensor = Tensor::<B, 1, Int>::from_ints(indices, &self.targets.device());
+        let idx_tensor = Tensor::<1, Int>::from_ints(indices, &self.targets.device());
         Self {
             data: self.data.clone().select(0, idx_tensor.clone()),
             targets: self.targets.clone().select(0, idx_tensor),
@@ -51,7 +53,7 @@ impl<B: Backend> Batch<B> {
     pub fn slice(&self, start: usize, end: usize, stride: usize) -> Self {
         let device = self.targets.device();
         let indices: Vec<i32> = (start as i32..end as i32).step_by(stride).collect();
-        let idx_tensor = Tensor::<B, 1, Int>::from_ints(indices.as_slice(), &device);
+        let idx_tensor = Tensor::<1, Int>::from_ints(indices.as_slice(), &device);
         Self {
             data: self.data.clone().select(0, idx_tensor.clone()),
             targets: self.targets.clone().select(0, idx_tensor),
@@ -64,16 +66,16 @@ impl<B: Backend> Batch<B> {
 }
 
 /// Unified batcher trait for all data types.
-pub trait Batcher<B: Backend>: Send + Sync {
+pub trait Batcher: Send + Sync {
     fn generic_batch(
         &self,
         df: DataFrame,
-        transforms: Arc<Pipeline<B>>,
+        transforms: Arc<Pipeline>,
         shape: Shape,
         data_col: &str,
         label_col: &str,
-        device: &B::Device,
-    ) -> Batch<B> {
+        device: &Device,
+    ) -> Batch {
         let flat_size = shape.clone().flatten().len();
         let mut buf: Vec<u8> = Vec::with_capacity(flat_size);
         df.column(data_col)
@@ -93,9 +95,9 @@ pub trait Batcher<B: Backend>: Send + Sync {
             .into_no_null_iter()
             .collect();
 
-        let labels = Tensor::<B, 1, Int>::from_ints(labelbuf.as_slice(), device);
+        let labels = Tensor::<1, Int>::from_ints(labelbuf.as_slice(), device);
         let transformed = transforms.execute(
-            Tensor::<B, 4>::from_data(data, device)
+            Tensor::<4>::from_data(data, device)
                 //.swap_dims(1, -1)
                 .permute([0, 3, 1, 2])
                 .div_scalar(255),
@@ -107,5 +109,5 @@ pub trait Batcher<B: Backend>: Send + Sync {
         }
     }
 
-    fn batch(&self, df: DataFrame, transforms: Arc<Pipeline<B>>, device: &B::Device) -> Batch<B>;
+    fn batch(&self, df: DataFrame, transforms: Arc<Pipeline>, device: &Device) -> Batch;
 }

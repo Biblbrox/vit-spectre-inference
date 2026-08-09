@@ -1,19 +1,22 @@
+
 use burn::{
     Tensor,
     config::Config,
     module::{Module, Param},
-    tensor::backend::Backend,
+    backend::Backend,
+    tensor::Device,
 };
 
 #[derive(Module, Debug)]
-pub struct DynamicERF<B: Backend> {
+pub struct DynamicERF {
     normalized_shape: usize,
     /// Stored flat — reshaped to trailing dim at runtime
     /// There's no other way to support multiple dimensions of tensors... probably
-    alpha: Param<Tensor<B, 1>>,
-    weight: Param<Tensor<B, 1>>,
-    bias: Param<Tensor<B, 1>>,
-    shift: Param<Tensor<B, 1>>,
+    alpha: Param<Tensor<1>>,
+    weight: Param<Tensor<1>>,
+    bias: Param<Tensor<1>>,
+    shift: Param<Tensor<1>>,
+    
 }
 
 #[derive(Config, Debug)]
@@ -25,11 +28,11 @@ pub struct DynamicERFConfig {
     shift_init_value: f32,
 }
 
-impl<B: Backend> DynamicERF<B> {
+impl DynamicERF {
     /// Works for any rank D >= 1.
     /// Parameters broadcast over all leading dimensions — only the last
     /// dimension must equal `normalized_shape`.
-    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn forward<const D: usize>(&self, x: Tensor<D>) -> Tensor<D> {
         // Build a shape [1, 1, ..., 1, normalized_shape] for D dimensions
         let mut param_shape = [1usize; D];
         param_shape[D - 1] = self.normalized_shape;
@@ -50,18 +53,18 @@ impl<B: Backend> DynamicERF<B> {
 }
 
 impl DynamicERFConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DynamicERF<B> {
+    pub fn init(&self, device: &Device) -> DynamicERF {
         let n = self.normalized_shape;
         DynamicERF {
             normalized_shape: n,
             // alpha and shift are scalars — store as length-1 1D tensor
-            alpha: Param::from_tensor(Tensor::<B, 1>::ones([1], device) * self.alpha_init_value)
+            alpha: Param::from_tensor(Tensor::<1>::ones([1], device) * self.alpha_init_value)
                 .set_require_grad(true),
-            shift: Param::from_tensor(Tensor::<B, 1>::ones([1], device) * self.shift_init_value)
+            shift: Param::from_tensor(Tensor::<1>::ones([1], device) * self.shift_init_value)
                 .set_require_grad(true),
             // weight and bias are per-feature — store as length-n 1D tensor
-            weight: Param::from_tensor(Tensor::<B, 1>::ones([n], device)).set_require_grad(true),
-            bias: Param::from_tensor(Tensor::<B, 1>::zeros([n], device)).set_require_grad(true),
+            weight: Param::from_tensor(Tensor::<1>::ones([n], device)).set_require_grad(true),
+            bias: Param::from_tensor(Tensor::<1>::zeros([n], device)).set_require_grad(true),
         }
     }
 }
@@ -79,7 +82,7 @@ mod tests {
         type B = burn::backend::flex::Flex;
         let device = burn::backend::flex::FlexDevice::default();
 
-        let input = Tensor::<B, 3>::from_floats(
+        let input = Tensor::<3>::from_floats(
             [
                 [
                     [0.5946, 0.7705, 0.0795, 0.2642, 0.3723],
@@ -113,7 +116,7 @@ mod tests {
             &device,
         );
 
-        let output = Tensor::<B, 3>::from_floats(
+        let output = Tensor::<3>::from_floats(
             [
                 [
                     [0.32584011, 0.41412665, 0.04482946, 0.14819636, 0.20764662],

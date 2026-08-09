@@ -1,4 +1,6 @@
+
 use burn::{
+    backend::Backend,
     module::{Module, Param},
     nn::{
         Dropout, DropoutConfig,
@@ -9,8 +11,9 @@ use burn::{
 };
 
 #[derive(Module, Debug)]
-pub struct Patcher<B: Backend> {
-    conv: Conv2d<B>,
+pub struct Patcher {
+    conv: Conv2d,
+    
 }
 
 #[derive(Config, Debug)]
@@ -21,11 +24,12 @@ pub struct PatcherConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct PatchEmbedding<B: Backend> {
-    patcher: Patcher<B>,
-    position_embeddings: Param<Tensor<B, 3>>,
-    cls: Option<Param<Tensor<B, 3>>>,
+pub struct PatchEmbedding {
+    patcher: Patcher,
+    position_embeddings: Param<Tensor<3>>,
+    cls: Option<Param<Tensor<3>>>,
     dropout: Dropout,
+    
 }
 
 #[derive(Config, Debug)]
@@ -39,11 +43,11 @@ pub struct PatchEmbeddingConfig {
     use_cls: bool,
 }
 
-impl<B: Backend> Patcher<B> {
+impl Patcher {
     // # Shapes
     // - Images: [batch_size, num_channels, height, width]
     // - Output: [batch_size, num_channels, num_patches, embed_dim]
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 3> {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<3> {
         let x = self.conv.forward(images); // [batch_size, embed_dim, row_patch_num, row_patch_num]
         let x = x.flatten(2, 3); // [batch_suze, embed_dim, total_patch_num]
         x.transpose() // [batch_size, total_patch_num, embed_dim]
@@ -51,7 +55,7 @@ impl<B: Backend> Patcher<B> {
 }
 
 impl PatcherConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> Patcher<B> {
+    pub fn init(&self, device: &Device) -> Patcher {
         Patcher {
             conv: Conv2dConfig::new(
                 [self.in_channels, self.embed_dim],
@@ -63,8 +67,8 @@ impl PatcherConfig {
     }
 }
 
-impl<B: Backend> PatchEmbedding<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 3> {
+impl PatchEmbedding {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<3> {
         let patches = self.patcher.forward(images); // [batch_size, total_patch_dim, embed_dim]
         let mut x = self.position_embeddings.val() + patches;
         if self.cls.is_some() {
@@ -76,10 +80,10 @@ impl<B: Backend> PatchEmbedding<B> {
 }
 
 impl PatchEmbeddingConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> PatchEmbedding<B> {
+    pub fn init(&self, device: &Device) -> PatchEmbedding {
         let distribution = Distribution::Normal(0.0, 1.0);
         let cls = match self.use_cls {
-            true => Some(Param::from_tensor(Tensor::<B, 3>::random(
+            true => Some(Param::from_tensor(Tensor::<3>::random(
                 [1, 1, self.embed_dim],
                 distribution,
                 device,
@@ -90,7 +94,7 @@ impl PatchEmbeddingConfig {
             patcher: PatcherConfig::new(self.in_channels, self.embed_dim, self.patch_size)
                 .init(device),
 
-            position_embeddings: Param::<Tensor<B, 3>>::from_tensor(Tensor::<B, 3>::random(
+            position_embeddings: Param::<Tensor<3>>::from_tensor(Tensor::<3>::random(
                 Shape::new([1, self.seq_length, self.embed_dim]),
                 distribution,
                 device,
@@ -106,7 +110,7 @@ impl PatchEmbeddingConfig {
 mod tests {
     use burn::{
         backend::{Flex, flex::FlexDevice},
-        tensor::Shape,
+        Shape,
     };
 
     use crate::embeddings::vit::PatcherConfig;
@@ -127,7 +131,7 @@ mod tests {
     #[test]
     fn test_patcher() {
         let device = Device::default();
-        let test_image = Tensor::<B, 4>::zeros(
+        let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
         );
@@ -142,7 +146,7 @@ mod tests {
     #[test]
     fn test_patch_embedding() {
         let device = Device::default();
-        let test_image = Tensor::<B, 4>::zeros(
+        let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
         );

@@ -2,7 +2,8 @@ use burn::{
     backend::Autodiff,
     module::{AutodiffModule, Module},
     train::{ClassificationOutput, InferenceStep, TrainStep},
-    tensor::backend::Backend,
+    backend::Backend,
+    tensor::Device,
 };
 
 use crate::data::batch::Batch;
@@ -19,13 +20,13 @@ pub struct TrainConfig {
     pub num_classes: usize,
 }
 
-pub trait ModelConfig<B: Backend> {
-    type ValidModel: Module<B> + InferenceStep<Input = Batch<B>, Output = ClassificationOutput<B>>;
-    type TrainModel: AutodiffModule<Autodiff<B>, InnerModule = Self::ValidModel>
-        + TrainStep<Input = Batch<Autodiff<B>>, Output = ClassificationOutput<Autodiff<B>>>
+pub trait ModelConfig {
+    type ValidModel: Module + InferenceStep<Input = Batch, Output = ClassificationOutput>;
+    type TrainModel: AutodiffModule
+        + TrainStep<Input = Batch, Output = ClassificationOutput>
         + core::fmt::Display
         + 'static;
 
-    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel;
-    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel;
+    fn init_training(&self, device: &Device, config: &TrainConfig) -> Self::TrainModel;
+    fn init_inference(&self, device: &Device, config: &TrainConfig) -> Self::ValidModel;
 }

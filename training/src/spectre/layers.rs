@@ -1,20 +1,23 @@
+
 use burn::{
+    backend::Backend,
     config::Config,
     module::Module,
-    tensor::{Shape, Tensor, TensorData, backend::Backend},
+    tensor::{Device, Shape, Tensor, TensorData},
 };
 
 use crate::spectre::transform::build_dct_projection;
 
 /// A parameter-free linear layer whose weight matrix is a fixed DCT-II
-/// projection.  Drop-in replacement for `Linear<B>` wherever no bias
+/// projection.  Drop-in replacement for `Linear` wherever no bias
 /// and no learned weights are needed.
 ///
 /// Forward signature matches `Linear`:
-///   `Tensor<B, N>` -> `Tensor<B, N>`  (last dim: in_features -> out_features)
+///   `Tensor<N>` -> `Tensor<N>`  (last dim: in_features -> out_features)
 #[derive(Module, Debug)]
-pub struct DctLinear<B: Backend> {
-    weight: Tensor<B, 3>,
+pub struct DctLinear {
+    weight: Tensor<3>,
+    
 }
 
 #[derive(Config, Debug)]
@@ -24,11 +27,11 @@ pub struct DctLinearConfig {
 }
 
 impl DctLinearConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DctLinear<B> {
+    pub fn init(&self, device: &Device) -> DctLinear {
         assert!(self.in_features > 0 && self.out_features > 0);
 
         let data = build_dct_projection(self.in_features, self.out_features);
-        let weight = Tensor::<B, 2>::from_data(
+        let weight = Tensor::<2>::from_data(
             TensorData::new(data, Shape::new([self.out_features, self.in_features])),
             device,
         )
@@ -39,8 +42,8 @@ impl DctLinearConfig {
     }
 }
 
-impl<B: Backend> DctLinear<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl DctLinear {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         x.matmul(self.weight.clone())
     }
 }

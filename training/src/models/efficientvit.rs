@@ -1,9 +1,10 @@
+
 use burn::{
-    backend::Autodiff,
+    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
     prelude::*,
-    tensor::{Int, backend::AutodiffBackend, backend::Backend},
+    tensor::Int,
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use serde::Deserialize;
@@ -17,9 +18,10 @@ use crate::{
 };
 
 #[derive(Module, Debug)]
-pub struct FFN<B: Backend> {
-    fc1: ConvBNAct<B>,
-    fc2: ConvBNAct<B>,
+pub struct FFN {
+    fc1: ConvBNAct,
+    fc2: ConvBNAct,
+    
 }
 
 #[derive(Config, Debug)]
@@ -30,7 +32,7 @@ pub struct FFNConfig {
 }
 
 impl FFNConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> FFN<B> {
+    pub fn init(&self, device: &Device) -> FFN {
         let hidden = self.dim * self.expansion_ratio;
 
         FFN {
@@ -40,8 +42,8 @@ impl FFNConfig {
     }
 }
 
-impl<B: Backend> FFN<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl FFN {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let residual = x.clone();
 
         let x = self.fc1.forward(x);
@@ -52,14 +54,15 @@ impl<B: Backend> FFN<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct EfficientViTBlock<B: Backend> {
-    ffn1: FFN<B>,
-    attention: CascadedGroupAttention<B>,
-    ffn2: FFN<B>,
+pub struct EfficientViTBlock {
+    ffn1: FFN,
+    attention: CascadedGroupAttention,
+    ffn2: FFN,
+    
 }
 
-impl<B: Backend> EfficientViTBlock<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl EfficientViTBlock {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let x = self.ffn1.forward(x);
         let x = self.attention.forward(x);
         self.ffn2.forward(x)
@@ -75,7 +78,7 @@ pub struct EfficientViTBlockConfig {
 }
 
 impl EfficientViTBlockConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> EfficientViTBlock<B> {
+    pub fn init(&self, device: &Device) -> EfficientViTBlock {
         EfficientViTBlock {
             ffn1: FFNConfig::new(self.dim)
                 .with_expansion_ratio(self.ffn_expansion_ratio)
@@ -89,10 +92,11 @@ impl EfficientViTBlockConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct DownsampleBlock<B: Backend> {
-    ffn1: FFN<B>,
-    mbconv: MBConv<B>,
-    ffn2: FFN<B>,
+pub struct DownsampleBlock {
+    ffn1: FFN,
+    mbconv: MBConv,
+    ffn2: FFN,
+    
 }
 
 #[derive(Config, Debug)]
@@ -106,7 +110,7 @@ pub struct DownsampleBlockConfig {
 }
 
 impl DownsampleBlockConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DownsampleBlock<B> {
+    pub fn init(&self, device: &Device) -> DownsampleBlock {
         DownsampleBlock {
             ffn1: FFNConfig::new(self.in_channels)
                 .with_expansion_ratio(self.ffn_expansion_ratio)
@@ -122,8 +126,8 @@ impl DownsampleBlockConfig {
     }
 }
 
-impl<B: Backend> DownsampleBlock<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl DownsampleBlock {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<4> {
         let x = self.ffn1.forward(x);
         let x = self.mbconv.forward(x);
         self.ffn2.forward(x)
@@ -131,12 +135,13 @@ impl<B: Backend> DownsampleBlock<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct EfficientViTStage<B: Backend> {
-    blocks: Vec<EfficientViTBlock<B>>,
+pub struct EfficientViTStage {
+    blocks: Vec<EfficientViTBlock>,
+    
 }
 
-impl<B: Backend> EfficientViTStage<B> {
-    pub fn forward(&self, mut x: Tensor<B, 4>) -> Tensor<B, 4> {
+impl EfficientViTStage {
+    pub fn forward(&self, mut x: Tensor<4>) -> Tensor<4> {
         for block in self.blocks.iter() {
             x = block.forward(x);
         }
@@ -146,26 +151,27 @@ impl<B: Backend> EfficientViTStage<B> {
 }
 
 #[derive(Module, Debug)]
-pub struct EfficientViT<B: Backend> {
-    patch_embed: PatchEmbeddingOverlapped<B>,
+pub struct EfficientViT {
+    patch_embed: PatchEmbeddingOverlapped,
 
-    stage1: EfficientViTStage<B>,
-    down1: DownsampleBlock<B>,
+    stage1: EfficientViTStage,
+    down1: DownsampleBlock,
 
-    stage2: EfficientViTStage<B>,
-    down2: DownsampleBlock<B>,
+    stage2: EfficientViTStage,
+    down2: DownsampleBlock,
 
-    stage3: EfficientViTStage<B>,
+    stage3: EfficientViTStage,
 
-    classifier: ConvBNAct<B>,
-    head: Linear<B>,
+    classifier: ConvBNAct,
+    head: Linear,
 
     in_channels: usize,
     image_size: usize,
+    
 }
 
-impl<B: Backend> EfficientViT<B> {
-    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
+impl EfficientViT {
+    pub fn forward(&self, x: Tensor<4>) -> Tensor<2> {
         let x = self.patch_embed.forward(x);
 
         let x = self.stage1.forward(x);
@@ -185,9 +191,9 @@ impl<B: Backend> EfficientViT<B> {
 
     pub fn forward_classification(
         &self,
-        images: Tensor<B, 4>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
+        images: Tensor<4>,
+        targets: Tensor<1, Int>,
+    ) -> ClassificationOutput {
         let output = self.forward(images);
         let loss = CrossEntropyLossConfig::new()
             .init(&output.device())
@@ -232,13 +238,13 @@ impl Default for EfficientViTConfig {
 }
 
 impl EfficientViTConfig {
-    pub fn init<B: Backend>(
+    pub fn init(
         &self,
-        device: &B::Device,
+        device: &Device,
         in_channels: usize,
         image_size: usize,
         num_classes: usize,
-    ) -> EfficientViT<B> {
+    ) -> EfficientViT {
         let c1 = self.stem_channels;
         let c2 = self.stage_channels[1];
         let c3 = self.stage_channels[2];
@@ -295,7 +301,7 @@ pub struct EfficientViTStageConfig {
 }
 
 impl EfficientViTStageConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> EfficientViTStage<B> {
+    pub fn init(&self, device: &Device) -> EfficientViTStage {
         let mut blocks = Vec::with_capacity(self.num_blocks);
         for _ in 0..self.num_blocks {
             blocks.push(EfficientViTBlockConfig::new(self.dim, self.num_heads).init(device));
@@ -305,24 +311,24 @@ impl EfficientViTStageConfig {
     }
 }
 
-impl<B: Backend> ModelConfig<B> for EfficientViTConfig {
-    type TrainModel = EfficientViT<Autodiff<B>>;
-    type ValidModel = EfficientViT<B>;
+impl ModelConfig for EfficientViTConfig {
+    type TrainModel = EfficientViT;
+    type ValidModel = EfficientViT;
 
-    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+    fn init_training(&self, device: &Device, config: &TrainConfig) -> Self::TrainModel {
         self.init(device, config.in_channels, config.image_size, config.num_classes)
     }
 
-    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+    fn init_inference(&self, device: &Device, config: &TrainConfig) -> Self::ValidModel {
         self.init(device, config.in_channels, config.image_size, config.num_classes)
     }
 }
 
-impl<B: AutodiffBackend> TrainStep for EfficientViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl TrainStep for EfficientViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> TrainOutput<ClassificationOutput<B>> {
+    fn step(&self, batch: Batch) -> TrainOutput<ClassificationOutput> {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -335,11 +341,11 @@ impl<B: AutodiffBackend> TrainStep for EfficientViT<B> {
     }
 }
 
-impl<B: Backend> InferenceStep for EfficientViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl InferenceStep for EfficientViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> ClassificationOutput<B> {
+    fn step(&self, batch: Batch) -> ClassificationOutput {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -386,9 +392,9 @@ mod tests {
         let device = Default::default();
 
         let cfg = CascadedGroupAttentionConfig::new(64, 4).with_token_kernel_size(3);
-        let model = cfg.init::<B>(&device);
+        let model = cfg.init(&device);
 
-        let x = Tensor::<B, 4>::zeros([2, 64, 28, 28], &device);
+        let x = Tensor::<4>::zeros([2, 64, 28, 28], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, 64, 28, 28]);
@@ -399,9 +405,9 @@ mod tests {
         let device = Default::default();
 
         let cfg = EfficientViTBlockConfig::new(64, 4).with_ffn_expansion_ratio(2);
-        let model = cfg.init::<B>(&device);
+        let model = cfg.init(&device);
 
-        let x = Tensor::<B, 4>::zeros([2, 64, 28, 28], &device);
+        let x = Tensor::<4>::zeros([2, 64, 28, 28], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, 64, 28, 28]);
@@ -414,9 +420,9 @@ mod tests {
         let cfg = DownsampleBlockConfig::new(64, 128)
             .with_ffn_expansion_ratio(2)
             .with_mbconv_expand_ratio(4);
-        let model = cfg.init::<B>(&device);
+        let model = cfg.init(&device);
 
-        let x = Tensor::<B, 4>::zeros([2, 64, 28, 28], &device);
+        let x = Tensor::<4>::zeros([2, 64, 28, 28], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, 128, 14, 14]);
@@ -427,9 +433,9 @@ mod tests {
         let device = Default::default();
 
         let cfg = EfficientViTStageConfig::new(64, 2, 4);
-        let model = cfg.init::<B>(&device);
+        let model = cfg.init(&device);
 
-        let x = Tensor::<B, 4>::zeros([2, 64, 28, 28], &device);
+        let x = Tensor::<4>::zeros([2, 64, 28, 28], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, 64, 28, 28]);
@@ -438,9 +444,9 @@ mod tests {
     #[test]
     fn efficientvit_m0_runs_end_to_end() {
         let device = Default::default();
-        let model = m0_config().init::<B>(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
+        let model = m0_config().init(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
 
-        let x = Tensor::<B, 4>::zeros([2, IN_CHANNELS, IMG_SIZE, IMG_SIZE], &device);
+        let x = Tensor::<4>::zeros([2, IN_CHANNELS, IMG_SIZE, IMG_SIZE], &device);
         let y = model.forward(x);
 
         assert_eq!(y.dims(), [2, NUM_CLASSES]);

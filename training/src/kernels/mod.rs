@@ -1,4 +1,4 @@
-use burn::{Tensor, tensor::backend::Backend};
+use burn::{Tensor, backend::Backend};
 
 // For now, now backwards... I'm working on it
 //pub mod backward;
@@ -6,14 +6,14 @@ use burn::{Tensor, tensor::backend::Backend};
 //pub mod launch;
 //pub mod monarch;
 
-pub fn monarch_fused_reference<B: Backend>(
-    x: Tensor<B, 3>,
-    left: Tensor<B, 3>,
-    right: Tensor<B, 3>,
+pub fn monarch_fused_reference(
+    x: Tensor<3>,
+    left: Tensor<3>,
+    right: Tensor<3>,
     a: usize,
     b: usize,
-    bias: Option<Tensor<B, 3>>,
-) -> Tensor<B, 3> {
+    bias: Option<Tensor<3>>,
+) -> Tensor<3> {
     let [batch, n, _] = x.dims();
 
     // [B,N,a*b] -> [BN,a,b] -> [a,b,BN]

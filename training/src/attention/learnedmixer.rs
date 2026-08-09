@@ -1,19 +1,21 @@
+
 use burn::{
     config::Config,
     module::{Module, Param},
     nn::{Linear, LinearConfig},
-    prelude::Tensor,
+    prelude::{Device, Tensor},
     tensor::{Distribution, TensorData},
 };
 
-use burn::tensor::backend::Backend;
+use burn::backend::Backend;
 
 #[derive(Module, Debug)]
-pub struct LearnedPermuter<B: Backend> {
-    scores_u: Param<Tensor<B, 3>>, // [N, rank]
-    scores_v: Param<Tensor<B, 3>>, // [N, rank]
-    bias_proj: Linear<B>,
+pub struct LearnedPermuter {
+    scores_u: Param<Tensor<3>>, // [N, rank]
+    scores_v: Param<Tensor<3>>, // [N, rank]
+    bias_proj: Linear,
     temperature: f32,
+    
 }
 
 #[derive(Config, Debug)]
@@ -28,7 +30,7 @@ pub struct LearnedPermuterConfig {
 }
 
 impl LearnedPermuterConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> LearnedPermuter<B> {
+    pub fn init(&self, device: &Device) -> LearnedPermuter {
         let (u, v) = Self::layer_scores(self.seq_length, self.rank, self.layer_num, device);
         LearnedPermuter {
             scores_u: Param::from_tensor(u.unsqueeze_dim(0)).set_require_grad(true),
@@ -41,12 +43,12 @@ impl LearnedPermuterConfig {
     /// Factorize the cyclic-shift identity into U, V such that U @ V^T ≈ shift matrix.
     /// Uses the first `rank` DCT basis vectors as a structured low-rank initialisation
     /// so each layer still starts from a different prior.
-    fn layer_scores<B: Backend>(
+    fn layer_scores(
         n: usize,
         rank: usize,
         layer_num: usize,
-        device: &B::Device,
-    ) -> (Tensor<B, 2>, Tensor<B, 2>) {
+        device: &Device,
+    ) -> (Tensor<2>, Tensor<2>) {
         use std::f32::consts::PI;
         let shift = layer_num % n;
 
@@ -68,7 +70,7 @@ impl LearnedPermuterConfig {
         }
 
         let noise = |data: Vec<f32>| {
-            let base = Tensor::<B, 2>::from_data(TensorData::new(data, [n, rank]), device);
+            let base = Tensor::<2>::from_data(TensorData::new(data, [n, rank]), device);
             let noise = Tensor::random([n, rank], Distribution::Normal(0.0, 0.02), device);
             base + noise
         };
@@ -77,15 +79,15 @@ impl LearnedPermuterConfig {
     }
 }
 
-impl<B: Backend> LearnedPermuter<B> {
-    fn sinkhorn(&self, s: Tensor<B, 3>) -> Tensor<B, 3> {
+impl LearnedPermuter {
+    fn sinkhorn(&self, s: Tensor<3>) -> Tensor<3> {
         let s = s / self.temperature;
         let s_centered = s.clone() - s.max_dim(2);
         let s_exp = s_centered.exp();
         s_exp.clone() / s_exp.sum_dim(2)
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         let [b, n, _] = x.dims();
 
         let summary = x.clone().mean_dim(1).squeeze_dim::<2>(1);

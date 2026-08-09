@@ -1,9 +1,9 @@
-use std::marker::PhantomData;
 
 use burn::{
+    backend::Backend,
     module::Module,
-    prelude::Tensor,
-    tensor::{Distribution, backend::Backend},
+    prelude::{Device, Tensor},
+    tensor::Distribution,
 };
 
 pub mod builder;
@@ -13,72 +13,70 @@ pub mod mix;
 pub mod normalize;
 pub mod rotation;
 
-pub trait Augmentation<B: Backend>: Send + Sync {
-    fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4>;
+pub trait Augmentation: Send + Sync {
+    fn execute(&self, input: Tensor<4>) -> Tensor<4>;
 }
 
-pub struct Pipeline<B: Backend> {
-    transforms: Vec<Box<dyn Augmentation<B>>>,
-    ph: PhantomData<B>,
+pub struct Pipeline {
+    transforms: Vec<Box<dyn Augmentation>>,
+    
+    
 }
 
-impl<B: Backend> Default for Pipeline<B> {
-    fn default() -> Pipeline<B> {
+impl Default for Pipeline {
+    fn default() -> Pipeline {
         Pipeline {
             transforms: vec![],
-            ph: PhantomData,
         }
     }
 }
 
-impl<B: Backend> Pipeline<B> {
-    pub fn new(transforms: Vec<Box<dyn Augmentation<B>>>) -> Pipeline<B> {
+impl Pipeline {
+    pub fn new(transforms: Vec<Box<dyn Augmentation>>) -> Pipeline {
         Pipeline {
             transforms,
-            ph: PhantomData,
         }
     }
 
-    pub fn execute(&self, input: Tensor<B, 4>) -> Tensor<B, 4> {
+    pub fn execute(&self, input: Tensor<4>) -> Tensor<4> {
         self.transforms
             .iter()
             .fold(input, |acc, tr| tr.execute(acc))
     }
 
     /// Prepends transforms to the front of the pipeline
-    pub fn prepend(mut self, mut transforms: Vec<Box<dyn Augmentation<B>>>) -> Self {
+    pub fn prepend(mut self, mut transforms: Vec<Box<dyn Augmentation>>) -> Self {
         transforms.extend(self.transforms);
         self.transforms = transforms;
         self
     }
 
     /// Appends transforms to the back of the pipeline
-    pub fn append(mut self, transforms: Vec<Box<dyn Augmentation<B>>>) -> Self {
+    pub fn append(mut self, transforms: Vec<Box<dyn Augmentation>>) -> Self {
         self.transforms.extend(transforms);
         self
     }
 }
 
 #[derive(Module, Debug)]
-pub struct DropPath<B: Backend> {
+pub struct DropPath {
     drop_prob: f64,
-    phantom: PhantomData<B>,
+    
 }
 
-impl<B: Backend> DropPath<B> {
+impl DropPath {
     pub fn new(drop_prob: f64) -> Self {
         Self {
             drop_prob,
-            phantom: PhantomData,
         }
     }
 
     // Applies stochastic depth: randomly drops the residual branch per sample.
     // x:        the main path (before residual add)
     // residual: the branch output to stochastically drop
-    pub fn forward(&self, x: Tensor<B, 3>, residual: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, x: Tensor<3>, residual: Tensor<3>) -> Tensor<3> {
         // During inference or if drop_prob is 0 — passthrough
-        if self.drop_prob == 0.0 || !B::ad_enabled(&x.device()) {
+        if self.drop_prob == 0.0 {
             return x + residual;
         }
 
@@ -88,7 +86,7 @@ impl<B: Backend> DropPath<B> {
 
         // Per-sample binary mask: [B, 1, 1] — whole residual dropped per sample
         let mask =
-            Tensor::<B, 3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
+            Tensor::<3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
                 / keep_prob; // rescale so expectation is preserved
 
         x + residual * mask
@@ -100,7 +98,7 @@ mod tests {
     use burn::{
         Tensor,
         backend::{Flex, flex::FlexDevice},
-        tensor::{Shape, TensorData, Tolerance},
+        Shape, TensorData, Tolerance,
     };
 
     use crate::augmentations::{
@@ -116,16 +114,16 @@ mod tests {
         let std = vec![0.5, 0.5, 0.5];
         let mean = vec![0.5, 0.5, 0.5];
 
-        let normalize = Box::new(Normalize::<B>::new(std, mean, &device));
-        let random_rotate = Box::new(RandomAffine::<B>::new(0.5, 30.0));
-        let color_jitter = Box::new(ColorJitter::<B>::new(0.4, 0.4, 0.4));
+        let normalize = Box::new(Normalize::new(std, mean, &device));
+        let random_rotate = Box::new(RandomAffine::new(0.5, 30.0));
+        let color_jitter = Box::new(ColorJitter::new(0.4, 0.4, 0.4));
 
-        let transforms: Vec<Box<dyn Augmentation<B>>> =
+        let transforms: Vec<Box<dyn Augmentation>> =
             vec![normalize, random_rotate, color_jitter];
         let pipeline = Pipeline::new(transforms);
 
         // Fix: Use channels-first format [batch, channels, height, width]
-        let input = Tensor::<B, 4>::random(
+        let input = Tensor::<4>::random(
             Shape::new([128, 3, 32, 32]), // Changed from [128, 32, 32, 3]
             burn::tensor::Distribution::Normal(0.0, 0.5),
             &device,
@@ -140,8 +138,8 @@ mod tests {
     fn test_empty_pipeline() {
         let device = Device::default();
 
-        let pipeline = Pipeline::<B>::default();
-        let input = Tensor::<B, 4>::random(
+        let pipeline = Pipeline::default();
+        let input = Tensor::<4>::random(
             Shape::new([128, 3, 32, 32]),
             burn::tensor::Distribution::Normal(0.0, 0.5),
             &device,
@@ -156,15 +154,15 @@ mod tests {
     fn test_pipeline_append() {
         let device = Device::default();
 
-        let normalize = Box::new(Normalize::<B>::new(
+        let normalize = Box::new(Normalize::new(
             vec![1.0, 1.0, 1.0],
             vec![0.0, 0.0, 0.0],
             &device,
         ));
 
-        let pipeline = Pipeline::<B>::default().append(vec![normalize]);
+        let pipeline = Pipeline::default().append(vec![normalize]);
 
-        let input = Tensor::<B, 4>::ones(Shape::new([4, 3, 16, 16]), &device);
+        let input = Tensor::<4>::ones(Shape::new([4, 3, 16, 16]), &device);
         let res = pipeline.execute(input.clone());
 
         assert_eq!(res.shape(), input.shape());
@@ -174,21 +172,21 @@ mod tests {
     fn test_pipeline_prepend() {
         let device = Device::default();
 
-        let normalize1 = Box::new(Normalize::<B>::new(
+        let normalize1 = Box::new(Normalize::new(
             vec![1.0, 1.0, 1.0],
             vec![0.0, 0.0, 0.0],
             &device,
         ));
 
-        let normalize2 = Box::new(Normalize::<B>::new(
+        let normalize2 = Box::new(Normalize::new(
             vec![1.0, 1.0, 1.0],
             vec![0.0, 0.0, 0.0],
             &device,
         ));
 
-        let pipeline = Pipeline::<B>::new(vec![normalize1]).prepend(vec![normalize2]);
+        let pipeline = Pipeline::new(vec![normalize1]).prepend(vec![normalize2]);
 
-        let input = Tensor::<B, 4>::ones(Shape::new([4, 3, 16, 16]), &device);
+        let input = Tensor::<4>::ones(Shape::new([4, 3, 16, 16]), &device);
         let res = pipeline.execute(input.clone());
 
         assert_eq!(res.shape(), input.shape());
@@ -200,12 +198,12 @@ mod tests {
     #[test]
     fn test_color_jitter_with_normalize() {
         let device = Device::default();
-        let jitter = ColorJitter::<B>::new(0.0, 0.0, 0.0); // Identity transform
+        let jitter = ColorJitter::new(0.0, 0.0, 0.0); // Identity transform
 
         // Create normalize that does identity: (x - 0) / 1 = x
-        let normalize = Normalize::<B>::new(vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0], &device);
+        let normalize = Normalize::new(vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0], &device);
 
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(
                 vec![
                     0.2f32, 0.4, 0.6, 0.8, 0.3, 0.5, 0.7, 0.9, 0.1, 0.3, 0.5, 0.7,
@@ -228,10 +226,10 @@ mod tests {
     fn test_color_jitter_reproducibility() {
         let device = Device::default();
         // Test that zero params gives consistent results
-        let jitter1 = ColorJitter::<B>::new(0.0, 0.0, 0.0);
-        let jitter2 = ColorJitter::<B>::new(0.0, 0.0, 0.0);
+        let jitter1 = ColorJitter::new(0.0, 0.0, 0.0);
+        let jitter2 = ColorJitter::new(0.0, 0.0, 0.0);
 
-        let input = Tensor::<B, 4>::from_data(
+        let input = Tensor::<4>::from_data(
             TensorData::new(
                 vec![
                     0.2f32, 0.4, 0.6, 0.8, 0.3, 0.5, 0.7, 0.9, 0.1, 0.3, 0.5, 0.7,

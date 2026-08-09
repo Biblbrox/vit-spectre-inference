@@ -1,4 +1,4 @@
-use burn::{Tensor, module::Module, nn::Linear, tensor::backend::Backend};
+use burn::{Tensor, module::Module, nn::Linear, backend::Backend};
 
 use crate::{linear::monarch::MonarchLinear, utils::gcd};
 
@@ -29,13 +29,13 @@ pub fn optimal_block_count(in_features: usize, out_features: usize) -> usize {
 }
 
 #[derive(Module, Debug)]
-pub enum LinearLayer<B: Backend> {
-    Dense(Linear<B>),
-    Monarch(MonarchLinear<B>),
+pub enum LinearLayer {
+    Dense(Linear),
+    Monarch(MonarchLinear),
 }
 
-impl<B: Backend> LinearLayer<B> {
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+impl LinearLayer {
+    pub fn forward(&self, x: Tensor<3>) -> Tensor<3> {
         match self {
             Self::Dense(l) => l.forward(x),
             Self::Monarch(l) => l.forward(x),

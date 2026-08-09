@@ -1,19 +1,22 @@
+
 //! [TODO:description]
 
 use burn::{
     module::{Module, Param},
+    backend::Backend,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
     prelude::*,
-    tensor::{Distribution, Int, activation::relu, backend::Backend},
+    tensor::{Device, Distribution, Int, activation::relu},
 };
 
 #[derive(Module, Debug)]
-pub struct CloudPatcher<B: Backend> {
-    mlp1: Linear<B>,
-    mlp2: Linear<B>,
+pub struct CloudPatcher {
+    mlp1: Linear,
+    mlp2: Linear,
     num_centers: usize,
     k_neighbours: usize,
     density_radius: f32,
+    
 }
 
 #[derive(Config, Debug)]
@@ -26,11 +29,11 @@ pub struct CloudPatcherConfig {
     pub hidden_dim: usize,
 }
 
-impl<B: Backend> CloudPatcher<B> {
+impl CloudPatcher {
     // # Shapes
     // - Points: [batch_size, num_points, 3]
     // - Output: [batch_size, num_centers, embed_dim]
-    pub fn forward(&self, points: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, points: Tensor<3>) -> Tensor<3> {
         let [b, _n, _] = points.dims();
         let m = self.num_centers;
         let k = self.k_neighbours;
@@ -67,7 +70,7 @@ impl<B: Backend> CloudPatcher<B> {
 }
 
 impl CloudPatcherConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> CloudPatcher<B> {
+    pub fn init(&self, device: &Device) -> CloudPatcher {
         CloudPatcher {
             mlp1: LinearConfig::new(3, self.hidden_dim).init(device),
             mlp2: LinearConfig::new(self.hidden_dim, self.embed_dim).init(device),
@@ -83,11 +86,12 @@ impl CloudPatcherConfig {
 * into conventional patch embeddings, which ViT can process
 */
 #[derive(Module, Debug)]
-pub struct CloudPatchEmbedding<B: Backend> {
-    patcher: CloudPatcher<B>,
-    position_embeddings: Param<Tensor<B, 3>>, // [1, M, embed_dim]
-    cls: Option<Param<Tensor<B, 3>>>,
+pub struct CloudPatchEmbedding {
+    patcher: CloudPatcher,
+    position_embeddings: Param<Tensor<3>>, // [1, M, embed_dim]
+    cls: Option<Param<Tensor<3>>>,
     dropout: Dropout,
+    
 }
 
 #[derive(Config, Debug)]
@@ -102,11 +106,11 @@ pub struct CloudPatchEmbeddingConfig {
     pub hidden_dim: usize,
 }
 
-impl<B: Backend> CloudPatchEmbedding<B> {
+impl CloudPatchEmbedding {
     // # Shapes
     // - Points: [batch_size, num_points, 3]
     // - Output: [batch_size, num_centers (+ 1 if cls), embed_dim]
-    pub fn forward(&self, points: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(&self, points: Tensor<3>) -> Tensor<3> {
         let patches = self.patcher.forward(points); // [B, M, embed_dim]
         let mut x = self.position_embeddings.val() + patches;
 
@@ -120,11 +124,11 @@ impl<B: Backend> CloudPatchEmbedding<B> {
 }
 
 impl CloudPatchEmbeddingConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> CloudPatchEmbedding<B> {
+    pub fn init(&self, device: &Device) -> CloudPatchEmbedding {
         let distribution = Distribution::Normal(0.0, 1.0);
 
         let cls = if self.use_cls {
-            Some(Param::from_tensor(Tensor::<B, 3>::random(
+            Some(Param::from_tensor(Tensor::<3>::random(
                 [1, 1, self.embed_dim],
                 distribution,
                 device,
@@ -142,7 +146,7 @@ impl CloudPatchEmbeddingConfig {
             )
             .with_hidden_dim(self.hidden_dim)
             .init(device),
-            position_embeddings: Param::from_tensor(Tensor::<B, 3>::random(
+            position_embeddings: Param::from_tensor(Tensor::<3>::random(
                 [1, self.num_centers, self.embed_dim],
                 distribution,
                 device,
@@ -154,7 +158,7 @@ impl CloudPatchEmbeddingConfig {
     }
 }
 
-fn estimate_density<B: Backend>(points: Tensor<B, 3>, radius: f32) -> Tensor<B, 2> {
+fn estimate_density(points: Tensor<3>, radius: f32) -> Tensor<2> {
     let [b, n, _] = points.dims();
     let p1 = points.clone().unsqueeze_dim::<4>(2).expand([b, n, n, 3]);
     let p2 = points.clone().unsqueeze_dim::<4>(1).expand([b, n, n, 3]);
@@ -166,17 +170,17 @@ fn estimate_density<B: Backend>(points: Tensor<B, 3>, radius: f32) -> Tensor<B, 
         .squeeze_dim(2)
 }
 
-fn farthest_point_sample<B: Backend>(
-    points: Tensor<B, 3>,
-    density: Tensor<B, 2>,
+fn farthest_point_sample(
+    points: Tensor<3>,
+    density: Tensor<2>,
     num_centers: usize,
-) -> Tensor<B, 2, Int> {
+) -> Tensor<2, Int> {
     let [b, n, _] = points.dims();
     let device = points.device();
 
-    let mut min_dist = Tensor::<B, 2>::full([b, n], f32::MAX, &device);
-    let mut selected: Vec<Tensor<B, 2, Int>> = Vec::with_capacity(num_centers);
-    let mut current = Tensor::<B, 1, Int>::zeros([b], &device);
+    let mut min_dist = Tensor::<2>::full([b, n], f32::MAX, &device);
+    let mut selected: Vec<Tensor<2, Int>> = Vec::with_capacity(num_centers);
+    let mut current = Tensor::<1, Int>::zeros([b], &device);
 
     for _ in 0..num_centers {
         selected.push(current.clone().unsqueeze_dim(1)); // [B, 1]
@@ -195,7 +199,7 @@ fn farthest_point_sample<B: Backend>(
     Tensor::cat(selected, 1) // [B, M]
 }
 
-fn knn_group<B: Backend>(points: Tensor<B, 3>, centers: Tensor<B, 3>, k: usize) -> Tensor<B, 4> {
+fn knn_group(points: Tensor<3>, centers: Tensor<3>, k: usize) -> Tensor<4> {
     let [b, n, _] = points.dims();
     let [_, m, _] = centers.dims();
 
@@ -212,10 +216,10 @@ fn knn_group<B: Backend>(points: Tensor<B, 3>, centers: Tensor<B, 3>, k: usize) 
     grouped - centers_exp
 }
 
-fn density_normalise<B: Backend>(
-    grouped: Tensor<B, 4>,
-    center_density: Tensor<B, 2>,
-) -> Tensor<B, 4> {
+fn density_normalise(
+    grouped: Tensor<4>,
+    center_density: Tensor<2>,
+) -> Tensor<4> {
     let [b, m, k, _] = grouped.dims();
     let scale = (center_density + 1e-6)
         .sqrt()

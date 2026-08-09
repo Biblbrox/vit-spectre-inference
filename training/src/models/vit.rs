@@ -1,17 +1,13 @@
 use burn::{
     Tensor,
-    backend::Autodiff,
+    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{
         LayerNorm, LayerNormConfig, Linear, LinearConfig,
         loss::CrossEntropyLossConfig,
         transformer::{TransformerEncoder, TransformerEncoderConfig, TransformerEncoderInput},
     },
-    tensor::{
-        Int,
-        backend::{AutodiffBackend, Backend},
-        s,
-    },
+    tensor::{Device, Int, s},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use serde::Deserialize;
@@ -25,13 +21,14 @@ use crate::{
 /// Standard ViT implementation with cls token and fixed
 /// embed_dim
 #[derive(Module, Debug)]
-pub struct ViT<B: Backend> {
-    embedding_block: PatchEmbedding<B>,
-    encoder: TransformerEncoder<B>,
-    layer_norm: LayerNorm<B>,
-    linear: Linear<B>,
+pub struct ViT {
+    embedding_block: PatchEmbedding,
+    encoder: TransformerEncoder,
+    layer_norm: LayerNorm,
+    linear: Linear,
     in_channels: usize,
     image_size: usize,
+    
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,8 +41,8 @@ pub struct ViTConfig {
     pub dropout: f64,
 }
 
-impl<B: Backend> ViT<B> {
-    pub fn forward(&self, images: Tensor<B, 4>) -> Tensor<B, 2> {
+impl ViT {
+    pub fn forward(&self, images: Tensor<4>) -> Tensor<2> {
         let x = self.embedding_block.forward(images);
         let encoder_input = TransformerEncoderInput::new(x);
         let x = self.encoder.forward(encoder_input);
@@ -55,9 +52,9 @@ impl<B: Backend> ViT<B> {
 
     pub fn forward_classification(
         &self,
-        images: Tensor<B, 4>,
-        targets: Tensor<B, 1, Int>,
-    ) -> ClassificationOutput<B> {
+        images: Tensor<4>,
+        targets: Tensor<1, Int>,
+    ) -> ClassificationOutput {
         let output = self.forward(images);
         let loss = CrossEntropyLossConfig::new()
             .init(&output.device())
@@ -68,13 +65,13 @@ impl<B: Backend> ViT<B> {
 }
 
 impl ViTConfig {
-    pub fn init<B: Backend>(
+    pub fn init(
         &self,
-        device: &B::Device,
+        device: &Device,
         in_channels: usize,
         image_size: usize,
         num_classes: usize,
-    ) -> ViT<B> {
+    ) -> ViT {
         let grid_size = image_size / self.patch_size;
         let num_patches = grid_size.pow(2);
         ViT {
@@ -112,11 +109,11 @@ impl ViTConfig {
     }
 }
 
-impl<B: Backend> ModelConfig<B> for ViTConfig {
-    type TrainModel = ViT<Autodiff<B>>;
-    type ValidModel = ViT<B>;
+impl ModelConfig for ViTConfig {
+    type TrainModel = ViT;
+    type ValidModel = ViT;
 
-    fn init_training(&self, device: &B::Device, config: &TrainConfig) -> Self::TrainModel {
+    fn init_training(&self, device: &Device, config: &TrainConfig) -> Self::TrainModel {
         self.init(
             device,
             config.in_channels,
@@ -125,7 +122,7 @@ impl<B: Backend> ModelConfig<B> for ViTConfig {
         )
     }
 
-    fn init_inference(&self, device: &B::Device, config: &TrainConfig) -> Self::ValidModel {
+    fn init_inference(&self, device: &Device, config: &TrainConfig) -> Self::ValidModel {
         self.init(
             device,
             config.in_channels,
@@ -135,11 +132,11 @@ impl<B: Backend> ModelConfig<B> for ViTConfig {
     }
 }
 
-impl<B: AutodiffBackend> TrainStep for ViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl TrainStep for ViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> TrainOutput<ClassificationOutput<B>> {
+    fn step(&self, batch: Batch) -> TrainOutput<ClassificationOutput> {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -152,11 +149,11 @@ impl<B: AutodiffBackend> TrainStep for ViT<B> {
     }
 }
 
-impl<B: Backend> InferenceStep for ViT<B> {
-    type Input = Batch<B>;
-    type Output = ClassificationOutput<B>;
+impl InferenceStep for ViT {
+    type Input = Batch;
+    type Output = ClassificationOutput;
 
-    fn step(&self, batch: Batch<B>) -> ClassificationOutput<B> {
+    fn step(&self, batch: Batch) -> ClassificationOutput {
         let images = batch.data.clone().reshape([
             batch.batch_size(),
             self.in_channels,
@@ -171,7 +168,7 @@ impl<B: Backend> InferenceStep for ViT<B> {
 mod tests {
     use burn::{
         backend::{Flex, flex::FlexDevice},
-        tensor::Shape,
+        Shape,
     };
 
     use super::*;
@@ -204,11 +201,11 @@ mod tests {
     #[test]
     fn test_vit() {
         let device = Device::default();
-        let test_image = Tensor::<B, 4>::zeros(
+        let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
         );
-        let model = test_config().init::<B>(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
+        let model = test_config().init(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
         let vit_output = model.forward(test_image);
         assert_eq!(vit_output.shape(), Shape::new([BATCH_SIZE, NUM_CLASSES]));
     }

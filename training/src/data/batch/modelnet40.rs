@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use burn::{
-    prelude::Tensor,
-    tensor::{DType, Int, TensorData, backend::Backend},
+    backend::Backend,
+    prelude::{Device, Tensor},
+    tensor::{DType, Int, TensorData},
 };
 use polars::prelude::*;
 
@@ -22,13 +23,13 @@ impl ModelNet40Batcher {
     }
 }
 
-impl<B: Backend> Batcher<B> for ModelNet40Batcher {
+impl Batcher for ModelNet40Batcher {
     fn batch(
         &self,
         df: DataFrame,
-        _transforms: Arc<crate::augmentations::Pipeline<B>>,
-        device: &B::Device,
-    ) -> Batch<B> {
+        _transforms: Arc<crate::augmentations::Pipeline>,
+        device: &Device,
+    ) -> Batch {
         let batch_size = df.height();
 
         let total_floats = batch_size * NUM_POINTS * NUM_CHANNELS;
@@ -48,7 +49,7 @@ impl<B: Backend> Batcher<B> for ModelNet40Batcher {
             DType::F32,
         );
 
-        let points = Tensor::<B, 3>::from_data(pointdata, device);
+        let points = Tensor::<3>::from_data(pointdata, device);
 
         let labelbuf: Vec<i32> = df
             .column(LABELCOL)
@@ -58,7 +59,7 @@ impl<B: Backend> Batcher<B> for ModelNet40Batcher {
             .into_no_null_iter()
             .collect();
 
-        let targets = Tensor::<B, 1, Int>::from_ints(labelbuf.as_slice(), device);
+        let targets = Tensor::<1, Int>::from_ints(labelbuf.as_slice(), device);
 
         Batch {
             data: points.flatten::<1>(0, -1),
