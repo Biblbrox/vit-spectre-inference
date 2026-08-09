@@ -57,7 +57,7 @@ impl FrameBatchStrategy for FixedBatchStrategy {
 
                 if let Some(seed) = self.shuffle {
                     batch = batch
-                        .sample_n_literal(batch.height(), false, true, Some(seed))
+                        .sample_n_literal(batch.height(), false, Some(true), Some(seed))
                         .unwrap();
                 }
 

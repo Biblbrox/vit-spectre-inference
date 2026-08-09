@@ -86,7 +86,12 @@ impl FrameBatchStrategy for BufferedBatchStrategy {
 
                                 if shuffle.is_some() {
                                     batch = batch
-                                        .sample_n_literal(batch.height(), false, true, Some(seed))
+                                        .sample_n_literal(
+                                            batch.height(),
+                                            false,
+                                            Some(true),
+                                            Some(seed),
+                                        )
                                         .unwrap();
                                 }
 

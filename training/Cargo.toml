@@ -14,14 +14,14 @@ burn = { version = "0.22.0-pre.1", features = [
   "autodiff",
   "burn-dispatch"
 ], default-features = false }
-polars = { version = "0.54.4", features = [
+polars = { version = "0.55.2", features = [
   "async",
   "parquet",
   "lazy",
   "ipc",
   "performant",
 ], default-features = false }
-toml = { version = "1.1.2", default-features = false, features = ["parse"] }
+toml = { version = "1.1.4", default-features = false, features = ["parse"] }
 image = { version = "0.25.10", default-features = false, features = [
   "jpeg",
   "png",
@@ -42,7 +42,7 @@ in_memory_loader = []
 tempfile = "3.27.0"
 indicatif = { version = "0.18.6", default-features = false }
 cubecl = { version = "0.10.0", features = ["cuda"] }
-polars = { version = "0.54.4", features = [
+polars = { version = "0.55.2", features = [
   "parquet",
   "lazy",
 ], default-features = false }
