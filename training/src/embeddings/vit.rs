@@ -1,6 +1,5 @@
 
 use burn::{
-    backend::Backend,
     module::{Module, Param},
     nn::{
         Dropout, DropoutConfig,
@@ -108,17 +107,15 @@ impl PatchEmbeddingConfig {
 
 #[cfg(test)]
 mod tests {
-    use burn::{
-        backend::{Flex, flex::FlexDevice},
-        Shape,
-    };
+    use burn::{tensor::{Device, Shape}};
 
     use crate::embeddings::vit::PatcherConfig;
 
     use super::*;
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     const IN_CHANNELS: usize = 3;
     const PATCH_SIZE: usize = 4;
@@ -130,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_patcher() {
-        let device = Device::default();
+        let device = device();
         let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,
@@ -145,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_patch_embedding() {
-        let device = Device::default();
+        let device = device();
         let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,

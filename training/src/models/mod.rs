@@ -1,8 +1,6 @@
 use burn::{
-    backend::Autodiff,
     module::{AutodiffModule, Module},
     train::{ClassificationOutput, InferenceStep, TrainStep},
-    backend::Backend,
     tensor::Device,
 };
 

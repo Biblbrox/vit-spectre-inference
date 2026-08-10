@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use burn::{
-    backend::Backend,
     prelude::{Device, Tensor},
     tensor::{DType, Int, TensorData},
 };

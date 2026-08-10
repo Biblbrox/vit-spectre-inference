@@ -1,7 +1,6 @@
 
 use burn::{
-    backend::Backend,
-    prelude::{Device, Tensor},
+    prelude::Tensor,
     tensor::Int,
 };
 

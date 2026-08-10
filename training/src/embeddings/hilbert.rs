@@ -2,7 +2,6 @@
 use burn::{
     config::Config,
     module::Module,
-    backend::Backend,
     nn::{
         Linear, LinearConfig,
         conv::{Conv2d, Conv2dConfig},

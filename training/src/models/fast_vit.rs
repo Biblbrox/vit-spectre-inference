@@ -165,13 +165,11 @@ impl InferenceStep for FastViT {
 mod tests {
     use super::*;
     use crate::models::fast_vit::FastViTConfig;
-    use burn::{
-        Shape,
-        backend::{Flex, flex::FlexDevice},
-    };
+    use burn::tensor::{Device, Shape};
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     const IN_CHANNELS: usize = 3;
     const PATCH_SIZE: usize = 4;
@@ -198,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_vit() {
-        let device = Device::default();
+        let device = device();
         let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,

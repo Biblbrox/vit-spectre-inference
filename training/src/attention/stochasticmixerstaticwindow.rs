@@ -1,8 +1,6 @@
-
 use burn::{
     module::{Module, Param},
     prelude::{Device, Tensor},
-    backend::Backend,
     tensor::{Distribution, Int, activation::softmax},
 };
 
@@ -68,7 +66,6 @@ pub struct StochasticAttentionStaticWindow {
     window_indices: Tensor<1, Int>, // [N * bw]
     score_mode: StochasticMul,
     seq_length: usize,
-    
 }
 
 impl StochasticAttentionStaticWindow {

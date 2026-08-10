@@ -1,5 +1,4 @@
-
-use burn::{config::Config, module::Module, prelude::{Device, Tensor}, backend::Backend};
+use burn::{config::Config, module::Module, prelude::{Device, Tensor}};
 
 use crate::attention::{
     NormalizationMode,

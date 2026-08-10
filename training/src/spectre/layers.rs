@@ -1,6 +1,5 @@
 
 use burn::{
-    backend::Backend,
     config::Config,
     module::Module,
     tensor::{Device, Shape, Tensor, TensorData},

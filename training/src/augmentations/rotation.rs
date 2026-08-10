@@ -1,7 +1,6 @@
 use core::{f32, f64};
 
 use burn::{
-    backend::Backend,
     Tensor,
     tensor::{
         grid::affine_grid_2d,
@@ -32,8 +31,14 @@ impl Transform2D {
     /// A tensor with the same as the input
     pub fn transform(self, img: Tensor<4>) -> Tensor<4> {
         let [batch_size, channels, height, width] = img.shape().dims();
-        let transform = Tensor::<2>::from(self.transform);
-        let transform = transform.reshape([1, 2, 3]).expand([batch_size, 2, 3]);
+        let device = img.device();
+        // Flatten the 2x3 matrix into a 1D slice for from_floats
+        let flat: [f32; 6] = [
+            self.transform[0][0], self.transform[0][1], self.transform[0][2],
+            self.transform[1][0], self.transform[1][1], self.transform[1][2],
+        ];
+        let transform = Tensor::<1>::from_floats(&flat[..], &device).reshape([2, 3]);
+        let transform = transform.expand([batch_size, 2, 3]);
         let grid = affine_grid_2d(transform, [batch_size, channels, height, width]);
 
         let options = GridSampleOptions::new(InterpolateMode::Bilinear)
@@ -210,12 +215,11 @@ impl Augmentation for RandomFlip {
 mod tests {
     use super::*;
     use burn::Tensor;
-    use burn::backend::Flex;
-    use burn::backend::flex::FlexDevice;
-    use burn::tensor::{Shape, Tolerance};
+    use burn::tensor::{Device, Shape, Tolerance};
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     // ============================================================================
     // RandomFlip Tests
@@ -232,8 +236,9 @@ mod tests {
 
     #[test]
     fn test_random_flip_horizontal_preserves_shape() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2., 3.], [4., 5., 6.]]]], &device);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 3]));
@@ -242,8 +247,9 @@ mod tests {
 
     #[test]
     fn test_random_flip_vertical_preserves_shape() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Vertical);
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2., 3.], [4., 5., 6.]]]], &device);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 3]));
@@ -252,8 +258,9 @@ mod tests {
 
     #[test]
     fn test_random_flip_probability_one_always_preserves_shape() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2.], [3., 4.]]]], &device);
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), input.shape());
@@ -261,19 +268,11 @@ mod tests {
 
     #[test]
     fn test_random_flip_with_batch_images() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Horizontal);
-        let input = Tensor::<4>::from([
-            [
-                [[1., 2.], [3., 4.]],
-                [[5., 6.], [7., 8.]],
-                [[9., 10.], [11., 12.]],
-            ],
-            [
-                [[13., 14.], [15., 16.]],
-                [[17., 18.], [19., 20.]],
-                [[21., 22.], [23., 24.]],
-            ],
-        ]);
+        // Batch of 2 images, each with 3 channels, 2x2 pixels
+        let input = Tensor::<4>::ones([2, 3, 2, 2], &device);
+        // Just test that shape is preserved through the operation
 
         let output = flip.execute(input.clone());
         assert_eq!(output.shape(), input.shape());
@@ -293,8 +292,9 @@ mod tests {
 
     #[test]
     fn test_random_affine_preserves_shape() {
+        let device = device();
         let affine = RandomAffine::new(1.0, 30.0);
-        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2.], [3., 4.]]]], &device);
 
         let output = affine.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([1, 1, 2, 2]));
@@ -303,8 +303,12 @@ mod tests {
 
     #[test]
     fn test_random_affine_with_batch() {
+        let device = device();
         let affine = RandomAffine::new(1.0, 45.0);
-        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]], [[[5., 6.], [7., 8.]]]]);
+        let input = Tensor::<4>::from_floats(
+            [[[ [1., 2.], [3., 4.]]], [[ [5., 6.], [7., 8.]]]],
+            &device,
+        );
 
         let output = affine.execute(input.clone());
         assert_eq!(output.shape(), Shape::new([2, 1, 2, 2]));
@@ -312,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_random_affine_large_batch() {
-        let device = Device::default();
+        let device = device();
 
         let affine = RandomAffine::new(1.0, 30.0);
         let input = Tensor::<4>::zeros([128, 3, 32, 32], &device);
@@ -327,10 +331,11 @@ mod tests {
 
     #[test]
     fn test_random_flip_and_affine_can_be_chained() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Horizontal);
         let affine = RandomAffine::new(1.0, 30.0);
 
-        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2.], [3., 4.]]]], &device);
 
         let flipped = flip.execute(input.clone());
         let final_output = affine.execute(flipped);
@@ -340,12 +345,13 @@ mod tests {
 
     #[test]
     fn test_random_flip_horizontal_values() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Horizontal);
 
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2., 3.], [4., 5., 6.]]]], &device);
         let output = flip.execute(input);
 
-        let expected = Tensor::<4>::from([[[[3., 2., 1.], [6., 5., 4.]]]]);
+        let expected = Tensor::<4>::from_floats([[[[3., 2., 1.], [6., 5., 4.]]]], &device);
 
         expected
             .to_data()
@@ -354,12 +360,13 @@ mod tests {
 
     #[test]
     fn test_random_flip_vertical_values() {
+        let device = device();
         let flip = RandomFlip::new(1.0, Orientation::Vertical);
 
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2., 3.], [4., 5., 6.]]]], &device);
         let output = flip.execute(input);
 
-        let expected = Tensor::<4>::from([[[[4., 5., 6.], [1., 2., 3.]]]]);
+        let expected = Tensor::<4>::from_floats([[[[4., 5., 6.], [1., 2., 3.]]]], &device);
 
         expected
             .to_data()
@@ -368,13 +375,14 @@ mod tests {
 
     #[test]
     fn test_random_affine_rotation_45_values() {
+        let device = device();
         let affine = RandomAffine::new(1.0, 45.0);
 
-        let input = Tensor::<4>::from([[[[1., 2.], [3., 4.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2.], [3., 4.]]]], &device);
 
         let output = affine.execute(input.clone());
 
-        let expected = Tensor::<4>::from([[[[1.7500, 2.7929], [1.8358, 3.7500]]]]);
+        let expected = Tensor::<4>::from_floats([[[[1.7500, 2.7929], [1.8358, 3.7500]]]], &device);
 
         expected
             .to_data()
@@ -383,13 +391,20 @@ mod tests {
 
     #[test]
     fn test_random_affine_rotation_90_values() {
+        let device = device();
         let affine = RandomAffine::new(1.0, 90.0);
 
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.], [7., 8., 9.]]]]);
+        let input = Tensor::<4>::from_floats(
+            [[[ [1., 2., 3.], [4., 5., 6.], [7., 8., 9.]]]],
+            &device,
+        );
 
         let output = affine.execute(input.clone());
 
-        let expected = Tensor::<4>::from([[[[3., 6., 9.], [3., 6., 9.], [3., 6., 9.]]]]);
+        let expected = Tensor::<4>::from_floats(
+            [[[ [3., 6., 9.], [3., 6., 9.], [3., 6., 9.]]]],
+            &device,
+        );
 
         expected
             .to_data()
@@ -398,8 +413,9 @@ mod tests {
 
     #[test]
     fn test_random_flip_probability_zero_returns_unchanged() {
+        let device = device();
         let flip = RandomFlip::new(0.0, Orientation::Horizontal);
-        let input = Tensor::<4>::from([[[[1., 2., 3.], [4., 5., 6.]]]]);
+        let input = Tensor::<4>::from_floats([[[[1., 2., 3.], [4., 5., 6.]]]], &device);
 
         let output = flip.execute(input.clone());
 

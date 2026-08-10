@@ -3,7 +3,6 @@ use burn::{
     Tensor,
     config::Config,
     module::{Module, Param},
-    backend::Backend,
     tensor::Device,
 };
 
@@ -71,16 +70,19 @@ impl DynamicERFConfig {
 
 #[cfg(test)]
 mod tests {
-    use burn::Tensor;
+    use burn::{Tensor, tensor::Device};
 
     use crate::norm::DynamicERFConfig;
+
+    fn device() -> Device {
+        Device::flex()
+ }
 
     /// Test the erf function in comparison with python implementation from
     /// https://github.com/zlab-princeton/Derf/blob/main/ViT/dynamic_erf.py
     #[test]
     fn test_valid_erf() {
-        type B = burn::backend::flex::Flex;
-        let device = burn::backend::flex::FlexDevice::default();
+        let device = device();
 
         let input = Tensor::<3>::from_floats(
             [

@@ -7,7 +7,6 @@ use burn::{
         BatchNorm, BatchNormConfig, PaddingConfig2d, Relu,
         conv::{Conv2d, Conv2dConfig},
     },
-    backend::Backend,
     tensor::Device,
 };
 

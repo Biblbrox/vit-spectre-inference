@@ -1,6 +1,5 @@
 
 use burn::{
-    backend::Backend,
     Tensor,
     tensor::{module::conv2d, ops::PaddedConvOptions, Device, Shape},
 };
@@ -325,9 +324,7 @@ impl Augmentation for GaussianBlur {
 mod tests {
     use burn::{
         Tensor,
-        backend::{Flex, flex::FlexDevice},
-        
-tensor::{Shape, TensorData, Tolerance},
+        tensor::{Device, Shape, TensorData, Tolerance},
     };
 
     use crate::augmentations::{
@@ -335,12 +332,13 @@ tensor::{Shape, TensorData, Tolerance},
         colors::{ColorJitter, RandomGrayscale},
     };
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn test_color_jitter_zero_params_preserves_input() {
-        let device = Device::default();
+        let device = device();
         // With all parameters set to 0, no change should occur
         let jitter = ColorJitter::new(0.0, 0.0, 0.0);
 
@@ -364,7 +362,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_color_jitter_preserves_shape() {
-        let device = Device::default();
+        let device = device();
         let jitter = ColorJitter::new(0.5, 0.5, 0.5);
 
         let input = Tensor::<4>::random(
@@ -381,7 +379,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_color_jitter_preserves_shape_batch() {
-        let device = Device::default();
+        let device = device();
         let jitter = ColorJitter::new(0.3, 0.3, 0.3);
 
         let input = Tensor::<4>::random(
@@ -397,7 +395,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_color_jitter_values_in_range() {
-        let device = Device::default();
+        let device = device();
         let jitter = ColorJitter::new(0.5, 0.5, 0.5);
 
         let input = Tensor::<4>::random(
@@ -419,7 +417,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_color_jitter_different_input_shapes() {
-        let device = Device::default();
+        let device = device();
         let jitter = ColorJitter::new(0.3, 0.3, 0.3);
 
         // Test with non-square images
@@ -444,7 +442,7 @@ tensor::{Shape, TensorData, Tolerance},
     //
     #[test]
     fn test_random_grayscale_probability_one_always_grayscales() {
-        let device = Device::default();
+        let device = device();
         let gray = RandomGrayscale::new(1.0);
 
         // Input with different channel values
@@ -498,7 +496,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_random_grayscale_probability_zero_never_grayscales() {
-        let device = Device::default();
+        let device = device();
         let gray = RandomGrayscale::new(0.0);
 
         let input = Tensor::<4>::from_data(

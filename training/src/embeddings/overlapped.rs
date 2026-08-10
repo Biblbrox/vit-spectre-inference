@@ -1,4 +1,4 @@
-use burn::{Tensor, config::Config, module::Module, backend::Backend, tensor::Device};
+use burn::{Tensor, config::Config, module::Module, tensor::Device};
 
 use crate::conv::{ConvBNAct, ConvBNActConfig};
 
@@ -46,15 +46,17 @@ impl PatchEmbeddingOverlappedConfig {
 #[cfg(test)]
 mod tests {
 
-    use burn::{backend::Flex, prelude::*};
+    use burn::{tensor::Device, prelude::*};
 
     use crate::embeddings::overlapped::PatchEmbeddingOverlappedConfig;
 
-    type B = Flex;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn patch_embedding_reduces_spatial_size() {
-        let device = Default::default();
+        let device = device();
 
         let cfg = PatchEmbeddingOverlappedConfig::new(3, 64)
             .with_stem_kernel(3)

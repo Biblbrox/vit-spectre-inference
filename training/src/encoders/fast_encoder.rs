@@ -4,19 +4,11 @@ use burn::{
     config::Config,
     module::{Module, Param},
     nn::{Dropout, DropoutConfig, Gelu, Linear, LinearConfig},
-    backend::Backend,
     tensor::{Device, Shape},
 };
 
 use crate::{
-    attention::{
-        dsthaattention::{DSTHA, DSTHAConfig},
-        stochasticmixer::{StochasticAttention, StochasticAttentionConfig},
-        stochasticmixerstatic::{StochasticAttentionStatic, StochasticAttentionStaticConfig},
-        stochasticmixerstaticwindow::{
-            StochasticAttentionStaticWindow, StochasticAttentionStaticWindowConfig,
-        },
-    },
+    attention::dsthaattention::{DSTHA, DSTHAConfig},
     augmentations::DropPath,
     norm::{DynamicERF, DynamicERFConfig},
 };
@@ -198,7 +190,7 @@ impl FastEncoderConfig {
     pub fn init(&self, device: &Device) -> FastEncoder {
         let mut layers = Vec::new();
 
-        for i in 0..self.num_layers {
+        for _i in 0..self.num_layers {
             layers.push(
                 FastEncoderLayerConfig::new(
                     self.seq_length,

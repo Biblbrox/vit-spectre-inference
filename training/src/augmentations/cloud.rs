@@ -1,6 +1,6 @@
 
 
-use burn::{prelude::*, backend::Backend};
+use burn::prelude::*;
 
 pub trait CloudAugmentation: Send + Sync {
     fn execute(&self, input: Tensor<3>) -> Tensor<3>;
@@ -109,17 +109,16 @@ impl CloudAugmentation for CloudRotation {
 mod tests {
     use super::*;
     use burn::{
-        backend::{Flex, flex::FlexDevice},
-        
-tensor::{Shape, TensorData, Tolerance},
+        tensor::{Device, Shape, TensorData, Tolerance},
     };
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn test_cloud_normalize_preserves_shape() {
-        let device = Device::default();
+        let device = device();
         let normalize = CloudNormalize::new(vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0], &device);
 
         let input = Tensor::<3>::ones([4, 1024, 3], &device);
@@ -130,7 +129,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_normalize_values() {
-        let device = Device::default();
+        let device = device();
         let normalize = CloudNormalize::new(vec![2.0, 2.0, 2.0], vec![1.0, 1.0, 1.0], &device);
 
         let input =
@@ -148,7 +147,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_empty_cloud_pipeline() {
-        let device = Device::default();
+        let device = device();
         let pipeline = CloudPipeline::default();
 
         let input = Tensor::<3>::ones([4, 1024, 3], &device);
@@ -159,7 +158,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_probability_zero_returns_unchanged() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(0.0, 90.0);
 
         let input = Tensor::<3>::from_data(
@@ -177,7 +176,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_90_degrees() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 90.0);
 
         // Single point (1, 2, 3) - rotate 90° around Z
@@ -199,7 +198,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_180_degrees() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 180.0);
 
         // Point (1, 2, 3) - rotate 180° around Z
@@ -223,7 +222,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_45_degrees() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 45.0);
 
         // Point (1, 0, 5) - rotate 45° around Z
@@ -254,7 +253,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_z_channel_unchanged() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 45.0);
 
         // Z coordinates should remain unchanged after rotation
@@ -284,7 +283,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_multiple_points() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 90.0);
 
         // Test with multiple points
@@ -321,7 +320,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_batch() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 90.0);
 
         // Test with batch of point clouds
@@ -358,7 +357,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_zero_degrees() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 0.0);
 
         // Zero degrees rotation should not change anything
@@ -376,7 +375,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_360_degrees() {
-        let device = Device::default();
+        let device = device();
         let rotation = CloudRotation::new(1.0, 360.0);
 
         // 360° rotation should return to original positions
@@ -394,7 +393,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_negative_angle() {
-        let device = Device::default();
+        let device = device();
         // -90° rotation should be equivalent to 270° rotation
         let rotation = CloudRotation::new(1.0, -90.0);
 
@@ -420,7 +419,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_pipeline_with_rotation_and_normalize() {
-        let device = Device::default();
+        let device = device();
 
         let normalize = CloudNormalize::new(vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0], &device);
 
@@ -444,7 +443,7 @@ tensor::{Shape, TensorData, Tolerance},
 
     #[test]
     fn test_cloud_rotation_with_pipeline() {
-        let device = Device::default();
+        let device = device();
 
         let rotation1 = CloudRotation::new(1.0, 90.0);
         let rotation2 = CloudRotation::new(1.0, -90.0);

@@ -1,10 +1,7 @@
-
 use burn::{
     module::{Module, Param},
     prelude::{Device, Tensor},
-    backend::Backend,
-    
-tensor::{Distribution, Int, activation::softmax},
+    tensor::{Distribution, Int, activation::softmax},
 };
 
 use crate::attention::{
@@ -72,7 +69,6 @@ pub struct StochasticAttentionWindow {
     score_mode: StochasticMul,
     train_mode: TrainingMode,
     seq_length: usize,
-    
 }
 
 impl StochasticAttentionWindow {
@@ -234,21 +230,14 @@ impl StochasticAttentionWindowConfig {
 /// we must be sure that it still produces the same results as unfold
 #[cfg(test)]
 mod tests {
-    use burn::{
-        backend::{Flex, flex::FlexDevice},
-        
-tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
-    };
+    use burn::tensor::{Device, Int, Shape, Tensor, TensorData, ops::PadMode, s};
 
-    type B = Flex;
-    type TestDevice = FlexDevice;
-
-    fn device() -> TestDevice {
-        Default::default()
+    fn device() -> Device {
+        Device::flex()
     }
 
     /// Build window_indices (flat [N*bw]) the same way init() does.
-    fn make_window_indices(n: usize, w: usize, device: &TestDevice) -> Tensor<1, Int> {
+    fn make_window_indices(n: usize, w: usize, device: &Device) -> Tensor<1, Int> {
         let window = 2 * w + 1;
         let pos = Tensor::<1, Int>::arange(0..n as i64, device).reshape([1, n, 1, 1]);
         let offsets = Tensor::<1, Int>::arange(-(w as i64)..(w as i64 + 1), device)
@@ -258,11 +247,7 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
 
     /// select-based local_window: drop-in replacement for pad+unfold.
     /// x: [B, N, H, dk] → [B, N, H, dk, bw]
-    fn local_window_select(
-        x: Tensor<4>,
-        window_indices: Tensor<1, Int>,
-        w: usize,
-    ) -> Tensor<5> {
+    fn local_window_select(x: Tensor<4>, window_indices: Tensor<1, Int>, w: usize) -> Tensor<5> {
         let [b, n, h, dk] = x.dims();
         let bw = 2 * w + 1;
         let gathered = x.select(1, window_indices); // [B, N*bw, H, dk]
@@ -293,8 +278,7 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
 
         // Deterministic input: value = position index so we can reason about it
         let data: Vec<f32> = (0..(b * n * h * dk) as i32).map(|i| i as f32).collect();
-        let x =
-            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+        let x = Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -320,8 +304,7 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
         let data: Vec<f32> = (0..(b * n * h * dk) as i32)
             .map(|i| i as f32 + 1.0)
             .collect();
-        let x =
-            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+        let x = Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -356,8 +339,7 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
         let data: Vec<f32> = (0..(b * n * h * dk) as i32)
             .map(|i| ((i as f32 * 1.6180339) % 7.0) - 3.5) // pseudo-random spread
             .collect();
-        let x =
-            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+        let x = Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w);
@@ -378,8 +360,7 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
         let (b, n, h, dk, w) = (2, 5, 2, 4, 0);
 
         let data: Vec<f32> = (0..(b * n * h * dk) as i32).map(|i| i as f32).collect();
-        let x =
-            Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
+        let x = Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
         let win_idx = make_window_indices(n, w, &device);
         let select_out = local_window_select(x.clone(), win_idx, w); // [B,N,H,dk,1]
@@ -408,10 +389,8 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
         for (b, n, h, dk, w) in [(1, 4, 1, 2, 1), (2, 8, 4, 16, 2), (1, 16, 8, 32, 4)] {
             let bw = 2 * w + 1;
             let data = vec![0.0f32; b * n * h * dk];
-            let x = Tensor::<4>::from_data(
-                TensorData::new(data, Shape::new([b, n, h, dk])),
-                &device,
-            );
+            let x =
+                Tensor::<4>::from_data(TensorData::new(data, Shape::new([b, n, h, dk])), &device);
 
             let win_idx = make_window_indices(n, w, &device);
             let select_out = local_window_select(x.clone(), win_idx, w);
@@ -464,8 +443,8 @@ tensor::{Int, Shape, Tensor, TensorData, ops::PadMode, s},
             &device,
         );
 
-        let diff_select = (select_mid - expected.clone()).abs().max().into_scalar();
-        let diff_unfold = (unfold_mid - expected).abs().max().into_scalar();
+        let diff_select: f32 = (select_mid - expected.clone()).abs().max().into_scalar();
+        let diff_unfold: f32 = (unfold_mid - expected).abs().max().into_scalar();
 
         assert!(
             diff_select < 1e-5,

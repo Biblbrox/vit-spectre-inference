@@ -3,7 +3,6 @@ use burn::{
     Tensor,
     config::Config,
     module::{Module, Param},
-    backend::Backend,
     tensor::{Device, Distribution},
 };
 

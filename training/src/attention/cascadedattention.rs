@@ -1,5 +1,5 @@
 
-use burn::{backend::Backend, config::Config, module::Module, prelude::*, tensor::activation::softmax};
+use burn::{config::Config, module::Module, prelude::*, tensor::activation::softmax};
 
 use crate::conv::{
     DepthwiseConvBnAct, DepthwiseConvBnActConfig, PointwiseConvBn, PointwiseConvBnConfig,

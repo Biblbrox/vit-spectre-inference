@@ -7,8 +7,6 @@ use burn::{
     tensor::{Distribution, TensorData},
 };
 
-use burn::backend::Backend;
-
 #[derive(Module, Debug)]
 pub struct LearnedPermuter {
     scores_u: Param<Tensor<3>>, // [N, rank]

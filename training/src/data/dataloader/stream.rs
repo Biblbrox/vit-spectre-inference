@@ -3,7 +3,6 @@ use std::{num::NonZero, sync::Arc};
 use burn::{
     data::dataset::DatasetError,
     data::dataloader::{DataLoader, DataLoaderIterator, Progress},
-    backend::Backend,
     tensor::Device,
 };
 use polars::lazy::{

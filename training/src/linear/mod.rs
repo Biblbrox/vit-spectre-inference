@@ -1,4 +1,4 @@
-use burn::{Tensor, module::Module, nn::Linear, backend::Backend};
+use burn::{Tensor, module::Module, nn::Linear};
 
 use crate::{linear::monarch::MonarchLinear, utils::gcd};
 

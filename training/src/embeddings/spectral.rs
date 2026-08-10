@@ -3,7 +3,6 @@ use std::f32::consts::PI;
 use burn::{
     config::Config,
     module::Module,
-    backend::Backend,
     prelude::{Device, Tensor},
     tensor::{Shape, TensorData},
 };

@@ -1,6 +1,5 @@
 use burn::{
     Tensor,
-    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
     tensor::{Device, Int},
@@ -148,12 +147,12 @@ impl InferenceStep for FastViT3D {
 mod tests {
     use super::*;
     use burn::{
-        backend::{Flex, flex::FlexDevice},
-        Shape,
+        tensor::{Device, Shape},
     };
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     const NUM_CENTERS: usize = 64;
     const K_NEIGHBOURS: usize = 16;
@@ -165,6 +164,7 @@ mod tests {
     const BATCH_SIZE: usize = 8;
     const HIDDEN_DIM: usize = 768;
     const DROPOUT: f64 = 0.001;
+    #[allow(unused)]
     const SINKHORN_TEMP: f32 = 0.05;
 
     fn test_config() -> FastViT3DConfig {
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     #[ignore] // argtopk not implemented on Flex (CPU) backend — requires CUDA
     fn test_fast_vit3d() {
-        let device = Device::default();
+        let device = device();
         let test_points =
             Tensor::<3>::zeros(Shape::new([BATCH_SIZE, NUM_POINTS, NUM_CHANNELS]), &device);
         let model = test_config().init(&device, NUM_CLASSES);

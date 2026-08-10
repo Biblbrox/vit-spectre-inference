@@ -1,6 +1,4 @@
-
 use burn::{
-    backend::Backend,
     config::Config,
     module::Module,
     prelude::{Device, Tensor},

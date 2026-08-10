@@ -1,9 +1,6 @@
-
 use burn::{
-    backend::Backend,
     Tensor,
-    
-tensor::{Device, TensorData},
+    tensor::{Device, TensorData},
 };
 
 use crate::augmentations::Augmentation;
@@ -12,7 +9,6 @@ use crate::augmentations::Augmentation;
 pub struct Normalize {
     mean: Tensor<4>,
     std: Tensor<4>,
-    
 }
 
 impl Normalize {
@@ -40,20 +36,20 @@ impl Augmentation for Normalize {
 mod tests {
     use burn::{
         Tensor,
-        backend::{Flex, flex::FlexDevice},
-        Shape, TensorData, Tolerance,
+        tensor::{Device, Shape, TensorData, Tolerance},
     };
 
     use crate::augmentations::{Augmentation, normalize::Normalize};
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn test_normalize_zero_std_panics_or_handles() {
         // This test documents behavior with zero std
         // Depending on your requirements, you might want to add validation
-        let device = Device::default();
+        let device = device();
         let normalize = Normalize::new(vec![0.0], vec![0.0], &device);
 
         let input = Tensor::<4>::ones([1, 1, 2, 2], &device);
@@ -67,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_normalize_single_channel_simple_case() {
-        let device = Device::default();
+        let device = device();
         // Normalize: (x - 1) / 2
         let normalize = Normalize::new(vec![2.0], vec![1.0], &device);
 

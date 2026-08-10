@@ -2,7 +2,7 @@
 
 use std::{fs::File, io::Write, panic, path::PathBuf};
 
-use burn::backend::{Autodiff, Backend, Dispatch};
+use burn::backend::{Autodiff, Dispatch};
 use burn::tensor::Device;
 use lightmix::models::efficientvit::EfficientViTConfig;
 use lightmix::models::fast_vit::FastViTConfig;
@@ -18,7 +18,9 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+#[allow(unused)]
 type MyBackend = Dispatch;
+#[allow(unused)]
 type MyAutodiffBackend = Autodiff<MyBackend>;
 
 macro_rules! info_for_model {

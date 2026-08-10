@@ -1,8 +1,7 @@
 use burn::{
-    backend::Backend,
+    Tensor,
     module::{AutodiffModule, Module, ModuleDisplay, ModuleDisplayDefault},
     tensor::Device,
-    Tensor,
 };
 
 pub mod cascadedattention;
@@ -26,32 +25,42 @@ pub enum NormalizationMode {
 
 impl Module for NormalizationMode {
     fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
-    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
-    fn to_device(self, _: &Device) -> Self { self }
-    fn fork(self, _: &Device) -> Self { self }
-    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self {
+        self
+    }
+    fn to_device(self, _: &Device) -> Self {
+        self
+    }
+    fn fork(self, _: &Device) -> Self {
+        self
+    }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices {
+        devices
+    }
 }
 
 impl AutodiffModule for NormalizationMode {
-    fn valid(&self) -> Self { *self }
-    fn from_inner(module: Self) -> Self { module }
+    fn valid(&self) -> Self {
+        *self
+    }
+    fn from_inner(module: Self) -> Self {
+        module
+    }
 }
 
 impl ModuleDisplayDefault for NormalizationMode {
-    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> {
+        None
+    }
 }
 
 impl ModuleDisplay for NormalizationMode {}
 
-pub fn sinkhorn< const D: usize>(
-    s: Tensor<D>,
-    temp: f32,
-    mode: NormalizationMode,
-) -> Tensor<D> {
+pub fn sinkhorn<const D: usize>(s: Tensor<D>, temp: f32, mode: NormalizationMode) -> Tensor<D> {
     assert!(D >= 2, "sinkhorn requires at least 2 dimensions");
     let last = D - 1;
     let second_last = D - 2;
-    
+
     match mode {
         NormalizationMode::Double => sinkhorn_double_generic(s, temp, last, second_last),
         NormalizationMode::Single => sinkhorn_single_generic(s, temp, last),
@@ -102,7 +111,7 @@ fn calc_qkv_hard(
     (apply(do_q, q), apply(do_k, k), apply(do_v, v))
 }
 
-pub fn sinkhorn_iter< const D: usize>(
+pub fn sinkhorn_iter<const D: usize>(
     s: Tensor<D>,
     temp: f32,
     iters: usize,
@@ -111,11 +120,13 @@ pub fn sinkhorn_iter< const D: usize>(
     assert!(D >= 2, "sinkhorn requires at least 2 dimensions");
     let last = D - 1;
     let second_last = D - 2;
-    
+
     let mut result = s.clone();
     for _i in 0..iters {
         result = match mode {
-            NormalizationMode::Double => sinkhorn_double_generic(result.clone(), temp, last, second_last),
+            NormalizationMode::Double => {
+                sinkhorn_double_generic(result.clone(), temp, last, second_last)
+            }
             NormalizationMode::Single => sinkhorn_single_generic(result.clone(), temp, last),
         };
     }
@@ -165,19 +176,33 @@ pub enum StochasticSelect {
 
 impl Module for StochasticSelect {
     fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
-    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
-    fn to_device(self, _: &Device) -> Self { self }
-    fn fork(self, _: &Device) -> Self { self }
-    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self {
+        self
+    }
+    fn to_device(self, _: &Device) -> Self {
+        self
+    }
+    fn fork(self, _: &Device) -> Self {
+        self
+    }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices {
+        devices
+    }
 }
 
 impl AutodiffModule for StochasticSelect {
-    fn valid(&self) -> Self { *self }
-    fn from_inner(module: Self) -> Self { module }
+    fn valid(&self) -> Self {
+        *self
+    }
+    fn from_inner(module: Self) -> Self {
+        module
+    }
 }
 
 impl ModuleDisplayDefault for StochasticSelect {
-    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> {
+        None
+    }
 }
 
 impl ModuleDisplay for StochasticSelect {}
@@ -205,19 +230,33 @@ pub enum StochasticMul {
 
 impl Module for StochasticMul {
     fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
-    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
-    fn to_device(self, _: &Device) -> Self { self }
-    fn fork(self, _: &Device) -> Self { self }
-    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self {
+        self
+    }
+    fn to_device(self, _: &Device) -> Self {
+        self
+    }
+    fn fork(self, _: &Device) -> Self {
+        self
+    }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices {
+        devices
+    }
 }
 
 impl AutodiffModule for StochasticMul {
-    fn valid(&self) -> Self { *self }
-    fn from_inner(module: Self) -> Self { module }
+    fn valid(&self) -> Self {
+        *self
+    }
+    fn from_inner(module: Self) -> Self {
+        module
+    }
 }
 
 impl ModuleDisplayDefault for StochasticMul {
-    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> {
+        None
+    }
 }
 
 impl ModuleDisplay for StochasticMul {}
@@ -232,31 +271,46 @@ pub enum TrainingMode {
 
 impl Module for TrainingMode {
     fn visit<V: burn::module::ModuleVisitor>(&self, _visitor: &mut V) {}
-    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self { self }
-    fn to_device(self, _: &Device) -> Self { self }
-    fn fork(self, _: &Device) -> Self { self }
-    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices { devices }
+    fn map<M: burn::module::ModuleMapper>(self, _mapper: &mut M) -> Self {
+        self
+    }
+    fn to_device(self, _: &Device) -> Self {
+        self
+    }
+    fn fork(self, _: &Device) -> Self {
+        self
+    }
+    fn collect_devices(&self, devices: burn::module::Devices) -> burn::module::Devices {
+        devices
+    }
 }
 
 impl AutodiffModule for TrainingMode {
-    fn valid(&self) -> Self { *self }
-    fn from_inner(module: Self) -> Self { module }
+    fn valid(&self) -> Self {
+        *self
+    }
+    fn from_inner(module: Self) -> Self {
+        module
+    }
 }
 
 impl ModuleDisplayDefault for TrainingMode {
-    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> { None }
+    fn content(&self, _content: burn::module::Content) -> Option<burn::module::Content> {
+        None
+    }
 }
 
 impl ModuleDisplay for TrainingMode {}
 
 #[cfg(test)]
 mod tests {
-    use burn::{Tensor, backend::Flex, tensor::TensorData};
+    use burn::{Tensor, tensor::{Device, TensorData}};
 
     use crate::attention::NormalizationMode;
 
-    type B = Flex;
-    type Device = burn::backend::flex::FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     fn naive_sinkhorn_double_2d(matrix: &[f32], rows: usize, cols: usize, temp: f32) -> Vec<f32> {
         let mut mat = matrix.to_vec();
@@ -366,7 +420,7 @@ mod tests {
     }
 
     fn make_tensor_4d(data: &[f32], shape: &[usize]) -> Tensor<4> {
-        let device = Device::default();
+        let device = device();
         Tensor::<4>::from_data(TensorData::new(data.to_vec(), shape.to_vec()), &device)
     }
 
@@ -434,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_sinkhorn_double_stochastic() {
-        let device = Device::default();
+        let device = device();
         let input = Tensor::<4>::from_floats([[[[1.0, 2.0], [3.0, 4.0]]]], &device);
         let output = super::sinkhorn(input, 1.0, NormalizationMode::Double);
         let d = to_vec(&output);
@@ -548,7 +602,7 @@ mod tests {
     #[test]
     fn test_sinkhorn_high_contrast_input() {
         // High-contrast input should produce more peaked distribution
-        let device = Device::default();
+        let device = device();
         let high_contrast = Tensor::<4>::from_floats([[[[10.0, 0.1], [0.1, 10.0]]]], &device);
         let low_contrast = Tensor::<4>::from_floats([[[[1.0, 0.9], [0.9, 1.0]]]], &device);
 

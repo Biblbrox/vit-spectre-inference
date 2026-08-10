@@ -1,13 +1,10 @@
-use burn::{
-    backend::Backend,
-    train::{
+use burn::train::{
         ClassificationOutput,
         metric::{
             Adaptor, Metric, MetricAttributes, MetricMetadata, MetricName, Numeric,
             NumericAttributes, NumericEntry, SerializedEntry,
         },
-    },
-};
+    };
 use std::{sync::Arc, time::Instant};
 
 pub struct BatchTimeInput;

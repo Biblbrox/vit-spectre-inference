@@ -3,7 +3,6 @@
 
 use burn::{
     module::{Module, Param},
-    backend::Backend,
     nn::{Dropout, DropoutConfig, Linear, LinearConfig},
     prelude::*,
     tensor::{Device, Distribution, Int, activation::relu},

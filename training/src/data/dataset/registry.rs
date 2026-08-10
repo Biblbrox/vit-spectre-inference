@@ -4,7 +4,7 @@ use paste::paste;
 use super::{LazyDataset, LazyFiletype};
 use crate::augmentations::Pipeline;
 use crate::data::batch::Batch;
-use burn::{backend::Backend, prelude::Shape, tensor::Device};
+use burn::{prelude::Shape, tensor::Device};
 use polars::prelude::*;
 use std::{str::FromStr, sync::Arc};
 

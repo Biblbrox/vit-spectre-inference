@@ -1,15 +1,16 @@
 use burn::{
     config::Config,
     module::{Module, Param},
-    nn::{Linear, LinearConfig},
+    nn::{Linear, LinearConfig, Softplus, SoftplusConfig},
     prelude::{Device, Tensor},
+    tensor::linalg::l2_norm,
 };
 
 #[derive(Config, Debug)]
 pub struct DSTHAConfig {
     pub d_model: usize,
     pub n_heads: usize,
-    #[config(default = 3)]
+    #[config(default = 2)]
     pub sinkhorn_iters: usize,
     #[config(default = 1e-6)]
     pub epsilon: f32,
@@ -26,32 +27,23 @@ pub struct DSTHA {
     v_proj: Linear,
     out_proj: Linear,
     delta_proj: Linear,
+    softplus: Softplus,
     raw_gamma: Param<Tensor<1>>,
-    raw_m: Param<Tensor<1>>,
+    alpha: Param<Tensor<1>>,
     n_heads: usize,
     d_head: usize,
     sinkhorn_iters: usize,
     epsilon: f32,
 }
 
-fn softplus<const D: usize>(x: Tensor<D>) -> Tensor<D> {
-    let abs_x = x.clone().abs();
-    let max_x0 = (x + abs_x.clone()) / 2.0; // max(x,0), via (x+|x|)/2
-    let log_term = (abs_x * -1.0).exp() + 1.0; // 1 + exp(-|x|), always in (1,2]
-    max_x0 + log_term.log()
-}
-
-fn inv_softplus_init(target: f32, eps: f32) -> f32 {
-    ((target - eps).exp() - 1.0).ln()
-}
-
 impl DSTHA {
     fn m(&self) -> Tensor<1> {
-        softplus(self.raw_m.val()) + 1e-4
+        (1.0_f32 - self.alpha.val()).sqrt()
     }
 
     fn gamma(&self) -> Tensor<1> {
-        softplus(self.raw_gamma.val()) + 1e-4
+        //self.softplus.forward(self.raw_gamma.val()) + 1e-4
+        self.raw_gamma.val()
     }
 
     fn phi(&self, x: Tensor<4>, scale_b: Tensor<4>, gamma_b: Tensor<4>, m: Tensor<1>) -> Tensor<4> {
@@ -68,7 +60,7 @@ impl DSTHA {
 
         // delta(x): learnable per-token scale, applied to the *raw* token
         // vector x (same x that psi_m is built from), softplus'd positive.
-        let delta = softplus(self.delta_proj.forward(x)) + 1e-4; // [b,h,seq,1]
+        let delta = self.softplus.forward(self.delta_proj.forward(x)) + 1e-4; // [b,h,seq,1]
 
         let psi = delta * psi_raw / psi_norm; // psi_hat(x), broadcasts over d
 
@@ -81,14 +73,17 @@ impl DSTHA {
     /// phi_q, phi_k: [batch, heads, seq, d_head+1]
     /// returns (u, w): each [batch, heads, seq, 1]
     fn sinkhorn(&self, phi_q: Tensor<4>, phi_k: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
-        let [batch, heads, seq, _] = phi_q.dims();
-        let device = phi_q.device();
+        //let [batch, heads, seq, _] = phi_q.dims();
+        //let device = phi_q.device();
 
-        let mut u = Tensor::<4>::ones([batch, heads, seq, 1], &device);
-        let mut w = Tensor::<4>::ones([batch, heads, seq, 1], &device);
+        //let mut u = Tensor::<4>::ones([batch, heads, seq, 1], &device);
+        //let mut w = Tensor::<4>::ones([batch, heads, seq, 1], &device);
 
         let phi_q_t = phi_q.clone().transpose(); // [batch, heads, d+1, seq]
         let phi_k_t = phi_k.clone().transpose();
+
+        let mut u = 1.0_f32 / (l2_norm(phi_q.clone(), 3));
+        let mut w = 1.0_f32 / (l2_norm(phi_k.clone(), 3));
 
         for _ in 0..self.sinkhorn_iters {
             let qt_u = phi_q_t.clone().matmul(u.clone()); // [b,h,d+1,1]
@@ -122,8 +117,7 @@ impl DSTHA {
         let v = v.reshape([batch, seq, h, d]).swap_dims(1, 2);
 
         let m = self.m(); // [heads]
-        let m_sq = m.clone() * m.clone();
-        let alpha = m_sq * -1.0 + 1.0; // alpha = 1 - m^2, [heads]
+        let alpha = 1.0_f32 - m.clone().square(); // [heads]
         let scale = (alpha.exp() / 2.0).sqrt(); // sqrt(e^alpha / 2), [heads]
 
         let scale_b = scale.reshape([1, h, 1, 1]);
@@ -189,14 +183,9 @@ impl DSTHAConfig {
         );
         let d_head = self.d_model / self.n_heads;
 
-        let m0 = (1.0 - self.init_alpha).sqrt().max(1e-3);
-        let eps_m = 1e-4_f32;
-        let raw0 = ((m0 - eps_m).exp() - 1.0).ln();
+        let alpha = Tensor::<1>::full([self.n_heads], self.init_alpha, device);
 
-        let raw_m = Tensor::<1>::full([self.n_heads], raw0, device);
-
-        let raw_gamma0 = inv_softplus_init(self.init_gamma.max(1e-3), eps_m);
-        let raw_gamma = Tensor::<1>::full([self.n_heads], raw_gamma0, device);
+        let raw_gamma = Tensor::<1>::full([self.n_heads], self.init_gamma, device);
 
         let init_logits = || LinearConfig::new(self.d_model, self.d_model).init(device);
         DSTHA {
@@ -204,9 +193,10 @@ impl DSTHAConfig {
             k_proj: init_logits(),
             v_proj: init_logits(),
             out_proj: init_logits(),
+            softplus: SoftplusConfig::new().with_beta(0.1).init(),
             delta_proj: LinearConfig::new(d_head, 1).init(device),
             raw_gamma: Param::from_tensor(raw_gamma),
-            raw_m: Param::from_tensor(raw_m),
+            alpha: Param::from_tensor(alpha),
             n_heads: self.n_heads,
             d_head,
             sinkhorn_iters: self.sinkhorn_iters,
@@ -218,14 +208,15 @@ impl DSTHAConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::backend::Flex;
-    use burn::tensor::Distribution;
+    use burn::tensor::{Device, Distribution};
 
-    type B = Flex<f32>;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn forward_runs_and_marginals_converge_to_one() {
-        let device = Default::default();
+        let device = device();
         let config = DSTHAConfig::new(16, 4).with_sinkhorn_iters(10);
         let model = config.init(&device);
 

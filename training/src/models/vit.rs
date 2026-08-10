@@ -1,6 +1,5 @@
 use burn::{
     Tensor,
-    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{
         LayerNorm, LayerNormConfig, Linear, LinearConfig,
@@ -167,14 +166,14 @@ impl InferenceStep for ViT {
 #[cfg(test)]
 mod tests {
     use burn::{
-        backend::{Flex, flex::FlexDevice},
-        Shape,
+        tensor::{Device, Shape},
     };
 
     use super::*;
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     const IN_CHANNELS: usize = 3;
     const PATCH_SIZE: usize = 4;
@@ -200,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_vit() {
-        let device = Device::default();
+        let device = device();
         let test_image = Tensor::<4>::zeros(
             Shape::new([BATCH_SIZE, IN_CHANNELS, IMG_SIZE, IMG_SIZE]),
             &device,

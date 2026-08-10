@@ -1,6 +1,5 @@
 
 use burn::{
-    backend::{Autodiff, AutodiffBackend, Backend},
     module::Module,
     nn::{Linear, LinearConfig, loss::CrossEntropyLossConfig},
     prelude::*,
@@ -359,14 +358,16 @@ impl InferenceStep for EfficientViT {
 #[cfg(test)]
 mod tests {
 
-    use burn::{backend::Flex, prelude::*};
+    use burn::{tensor::Device, prelude::*};
 
     use crate::models::efficientvit::{
         CascadedGroupAttentionConfig, DownsampleBlockConfig, EfficientViTBlockConfig,
         EfficientViTConfig, EfficientViTStageConfig,
     };
 
-    type B = Flex;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     const IN_CHANNELS: usize = 3;
     const IMG_SIZE: usize = 224;
@@ -389,7 +390,7 @@ mod tests {
 
     #[test]
     fn cga_preserves_shape() {
-        let device = Default::default();
+        let device = device();
 
         let cfg = CascadedGroupAttentionConfig::new(64, 4).with_token_kernel_size(3);
         let model = cfg.init(&device);
@@ -402,7 +403,7 @@ mod tests {
 
     #[test]
     fn efficientvit_block_preserves_shape() {
-        let device = Default::default();
+        let device = device();
 
         let cfg = EfficientViTBlockConfig::new(64, 4).with_ffn_expansion_ratio(2);
         let model = cfg.init(&device);
@@ -415,7 +416,7 @@ mod tests {
 
     #[test]
     fn downsample_block_halves_resolution_and_changes_channels() {
-        let device = Default::default();
+        let device = device();
 
         let cfg = DownsampleBlockConfig::new(64, 128)
             .with_ffn_expansion_ratio(2)
@@ -430,7 +431,7 @@ mod tests {
 
     #[test]
     fn stage_preserves_shape() {
-        let device = Default::default();
+        let device = device();
 
         let cfg = EfficientViTStageConfig::new(64, 2, 4);
         let model = cfg.init(&device);
@@ -443,7 +444,7 @@ mod tests {
 
     #[test]
     fn efficientvit_m0_runs_end_to_end() {
-        let device = Default::default();
+        let device = device();
         let model = m0_config().init(&device, IN_CHANNELS, IMG_SIZE, NUM_CLASSES);
 
         let x = Tensor::<4>::zeros([2, IN_CHANNELS, IMG_SIZE, IMG_SIZE], &device);

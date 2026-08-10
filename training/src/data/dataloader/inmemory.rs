@@ -7,10 +7,9 @@ use std::{
     thread,
 };
 
-use burn::{
-    data::dataloader::{DataLoader, DataLoaderIterator, Progress},
-    backend::Backend,
-};
+use burn::data::dataloader::{DataLoader, DataLoaderIterator, Progress};
+use burn::data::dataset::DatasetError;
+use burn::tensor::Device;
 use polars::lazy::{
     dsl::{Engine, len},
     frame::LazyFrame,
@@ -29,7 +28,6 @@ pub struct InMemoryDataLoader {
     batch_size: usize,
     num_workers: usize,
     device: Device,
-    
 }
 
 impl InMemoryDataLoader {
@@ -66,7 +64,7 @@ impl InMemoryDataLoader {
     }
 }
 
-impl DataLoader, Batch> for InMemoryDataLoader {
+impl DataLoader<Batch> for InMemoryDataLoader {
     fn iter<'a>(&'a self) -> Box<dyn DataLoaderIterator<Batch> + 'a> {
         if self.num_workers > 0 {
             let (tx, rx) = mpsc::sync_channel(4 * self.num_workers);
@@ -121,7 +119,7 @@ impl DataLoader, Batch> for InMemoryDataLoader {
                 batch_size: self.batch_size,
                 items_processed: 0,
                 items_total: self.items_total,
-                device: &self.device,
+                device: self.device.clone(),
             })
         } else {
             Box::new(InMemoryDataLoaderIterator {
@@ -132,7 +130,7 @@ impl DataLoader, Batch> for InMemoryDataLoader {
                 batch_size: self.batch_size,
                 items_processed: 0,
                 items_total: self.items_total,
-                device: &self.device,
+                device: self.device.clone(),
             })
         }
     }
@@ -141,7 +139,7 @@ impl DataLoader, Batch> for InMemoryDataLoader {
         self.items_total
     }
 
-    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader, Batch>> {
+    fn to_device(&self, device: &Device) -> Arc<dyn DataLoader<Batch>> {
         Arc::new(Self {
             lf: self.lf.clone(),
             batcher: self.batcher.clone(),
@@ -153,7 +151,7 @@ impl DataLoader, Batch> for InMemoryDataLoader {
         })
     }
 
-    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader, Batch>> {
+    fn slice(&self, start: usize, end: usize) -> Arc<dyn DataLoader<Batch>> {
         let len = end.saturating_sub(start);
 
         Arc::new(Self {
@@ -168,7 +166,7 @@ impl DataLoader, Batch> for InMemoryDataLoader {
     }
 }
 
-pub struct InMemoryDataLoaderIterator<'a, B: Backend> {
+pub struct InMemoryDataLoaderIterator {
     lf: LazyFrame,
     channel: Option<Arc<Mutex<Receiver<Batch>>>>,
     batcher: Arc<dyn Batcher>,
@@ -176,18 +174,18 @@ pub struct InMemoryDataLoaderIterator<'a, B: Backend> {
     batch_size: usize,
     items_processed: usize,
     items_total: usize,
-    device: &'a B::Device,
+    device: Device,
 }
 
-impl Iterator for InMemoryDataLoaderIterator<'a, B> {
-    type Item = Batch;
+impl Iterator for InMemoryDataLoaderIterator {
+    type Item = Result<Batch, DatasetError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(recv) = &self.channel {
             let batch = recv.lock().unwrap().recv().ok();
             let batch_size = batch.as_ref().map(|t| t.targets.dims()[0]).unwrap_or(0);
             self.items_processed += batch_size;
-            batch
+            Some(Ok(batch.unwrap()))
         } else {
             let (offset, length) = match self.items_processed + self.batch_size {
                 x if x <= self.items_total => (self.items_processed, self.batch_size),
@@ -200,23 +198,21 @@ impl Iterator for InMemoryDataLoaderIterator<'a, B> {
 
             self.items_processed += length;
 
-            (length > 0).then_some(
-                self.batcher.batch(
-                    self.lf
-                        .clone()
-                        .slice(offset as i64, length as u32)
-                        .collect()
-                        .unwrap(),
-                    self.transforms.clone(),
-                    self.device,
-                ),
-            )
+            (length > 0).then_some(Ok(self.batcher.batch(
+                self.lf
+                    .clone()
+                    .slice(offset as i64, length as u32)
+                    .collect()
+                    .unwrap(),
+                self.transforms.clone(),
+                &self.device,
+            )))
         }
     }
 }
 
-impl DataLoaderIterator<Batch> for InMemoryDataLoaderIterator<'a, B> {
+impl DataLoaderIterator<Batch> for InMemoryDataLoaderIterator {
     fn progress(&self) -> Progress {
-        Progress::new(self.items_processed, self.items_total)
+        Progress::new(self.items_processed, self.items_total, None)
     }
 }

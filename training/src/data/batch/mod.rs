@@ -4,7 +4,7 @@ pub mod modelnet40;
 use std::sync::Arc;
 
 use burn::tensor::{DType, Int, Shape, TensorData};
-use burn::{prelude::{Device, Tensor}, backend::Backend};
+use burn::prelude::{Device, Tensor};
 use polars::prelude::*;
 
 use crate::augmentations::Pipeline;

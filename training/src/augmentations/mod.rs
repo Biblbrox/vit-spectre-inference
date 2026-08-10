@@ -1,8 +1,6 @@
-
 use burn::{
-    backend::Backend,
     module::Module,
-    prelude::{Device, Tensor},
+    prelude::Tensor,
     tensor::Distribution,
 };
 
@@ -19,23 +17,17 @@ pub trait Augmentation: Send + Sync {
 
 pub struct Pipeline {
     transforms: Vec<Box<dyn Augmentation>>,
-    
-    
 }
 
 impl Default for Pipeline {
     fn default() -> Pipeline {
-        Pipeline {
-            transforms: vec![],
-        }
+        Pipeline { transforms: vec![] }
     }
 }
 
 impl Pipeline {
     pub fn new(transforms: Vec<Box<dyn Augmentation>>) -> Pipeline {
-        Pipeline {
-            transforms,
-        }
+        Pipeline { transforms }
     }
 
     pub fn execute(&self, input: Tensor<4>) -> Tensor<4> {
@@ -61,14 +53,11 @@ impl Pipeline {
 #[derive(Module, Debug)]
 pub struct DropPath {
     drop_prob: f64,
-    
 }
 
 impl DropPath {
     pub fn new(drop_prob: f64) -> Self {
-        Self {
-            drop_prob,
-        }
+        Self { drop_prob }
     }
 
     // Applies stochastic depth: randomly drops the residual branch per sample.
@@ -85,9 +74,8 @@ impl DropPath {
         let keep_prob = 1.0 - self.drop_prob;
 
         // Per-sample binary mask: [B, 1, 1] — whole residual dropped per sample
-        let mask =
-            Tensor::<3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
-                / keep_prob; // rescale so expectation is preserved
+        let mask = Tensor::<3>::random([batch, 1, 1], Distribution::Bernoulli(keep_prob), &device)
+            / keep_prob; // rescale so expectation is preserved
 
         x + residual * mask
     }
@@ -97,20 +85,20 @@ impl DropPath {
 mod tests {
     use burn::{
         Tensor,
-        backend::{Flex, flex::FlexDevice},
-        Shape, TensorData, Tolerance,
+        tensor::{Device, Shape, TensorData, Tolerance},
     };
 
     use crate::augmentations::{
         Augmentation, Pipeline, colors::ColorJitter, normalize::Normalize, rotation::RandomAffine,
     };
 
-    type B = Flex;
-    type Device = FlexDevice;
+    fn device() -> Device {
+        Device::flex()
+    }
 
     #[test]
     fn test_pipeline() {
-        let device = Device::default();
+        let device = device();
         let std = vec![0.5, 0.5, 0.5];
         let mean = vec![0.5, 0.5, 0.5];
 
@@ -118,8 +106,7 @@ mod tests {
         let random_rotate = Box::new(RandomAffine::new(0.5, 30.0));
         let color_jitter = Box::new(ColorJitter::new(0.4, 0.4, 0.4));
 
-        let transforms: Vec<Box<dyn Augmentation>> =
-            vec![normalize, random_rotate, color_jitter];
+        let transforms: Vec<Box<dyn Augmentation>> = vec![normalize, random_rotate, color_jitter];
         let pipeline = Pipeline::new(transforms);
 
         // Fix: Use channels-first format [batch, channels, height, width]
@@ -136,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_empty_pipeline() {
-        let device = Device::default();
+        let device = device();
 
         let pipeline = Pipeline::default();
         let input = Tensor::<4>::random(
@@ -152,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_append() {
-        let device = Device::default();
+        let device = device();
 
         let normalize = Box::new(Normalize::new(
             vec![1.0, 1.0, 1.0],
@@ -170,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_prepend() {
-        let device = Device::default();
+        let device = device();
 
         let normalize1 = Box::new(Normalize::new(
             vec![1.0, 1.0, 1.0],
@@ -197,7 +184,7 @@ mod tests {
     // ============================================================================
     #[test]
     fn test_color_jitter_with_normalize() {
-        let device = Device::default();
+        let device = device();
         let jitter = ColorJitter::new(0.0, 0.0, 0.0); // Identity transform
 
         // Create normalize that does identity: (x - 0) / 1 = x
@@ -224,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_color_jitter_reproducibility() {
-        let device = Device::default();
+        let device = device();
         // Test that zero params gives consistent results
         let jitter1 = ColorJitter::new(0.0, 0.0, 0.0);
         let jitter2 = ColorJitter::new(0.0, 0.0, 0.0);

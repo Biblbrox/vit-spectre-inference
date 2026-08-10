@@ -3,7 +3,6 @@ use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI, SQRT_2, TAU};
 use burn::serde::{Deserialize, Serialize};
 
 use burn::tensor::Tensor;
-use burn::backend::Backend;
 use burn::tensor::Device;
 
 /// Normalised DCT-II matrix [n, n].

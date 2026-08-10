@@ -1,8 +1,6 @@
-
 use burn::{
     module::{Module, Param},
     prelude::{Device, Tensor},
-    backend::Backend,
     tensor::{Distribution, activation::softmax},
 };
 
