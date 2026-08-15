@@ -1,19 +1,10 @@
 [package]
 name = "lightmix"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.22.0-pre.1", features = [
-  "fusion",
-  "std",
-  "cuda",
-  "train",
-  "tui",
-  "flex",
-  "autodiff",
-  "burn-dispatch"
-], default-features = false }
+burn = { version = "0.22.0-pre.2", features = ["fusion", "std", "cuda", "train", "tui", "flex", "autodiff", "burn-dispatch"], default-features = false }
 polars = { version = "0.55.2", features = [
   "async",
   "parquet",

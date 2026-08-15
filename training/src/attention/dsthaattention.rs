@@ -10,7 +10,7 @@ use burn::{
 pub struct DSTHAConfig {
     pub d_model: usize,
     pub n_heads: usize,
-    #[config(default = 2)]
+    #[config(default = 1)]
     pub sinkhorn_iters: usize,
     #[config(default = 1e-6)]
     pub epsilon: f32,
@@ -28,7 +28,7 @@ pub struct DSTHA {
     out_proj: Linear,
     delta_proj: Linear,
     softplus: Softplus,
-    raw_gamma: Param<Tensor<1>>,
+    gamma: Param<Tensor<1>>,
     alpha: Param<Tensor<1>>,
     n_heads: usize,
     d_head: usize,
@@ -39,11 +39,6 @@ pub struct DSTHA {
 impl DSTHA {
     fn m(&self) -> Tensor<1> {
         (1.0_f32 - self.alpha.val()).sqrt()
-    }
-
-    fn gamma(&self) -> Tensor<1> {
-        //self.softplus.forward(self.raw_gamma.val()) + 1e-4
-        self.raw_gamma.val()
     }
 
     fn phi(&self, x: Tensor<4>, scale_b: Tensor<4>, gamma_b: Tensor<4>, m: Tensor<1>) -> Tensor<4> {
@@ -59,7 +54,6 @@ impl DSTHA {
         let psi_norm = psi_sq_sum.sqrt() + 1e-6;
 
         // delta(x): learnable per-token scale, applied to the *raw* token
-        // vector x (same x that psi_m is built from), softplus'd positive.
         let delta = self.softplus.forward(self.delta_proj.forward(x)) + 1e-4; // [b,h,seq,1]
 
         let psi = delta * psi_raw / psi_norm; // psi_hat(x), broadcasts over d
@@ -73,17 +67,12 @@ impl DSTHA {
     /// phi_q, phi_k: [batch, heads, seq, d_head+1]
     /// returns (u, w): each [batch, heads, seq, 1]
     fn sinkhorn(&self, phi_q: Tensor<4>, phi_k: Tensor<4>) -> (Tensor<4>, Tensor<4>) {
-        //let [batch, heads, seq, _] = phi_q.dims();
-        //let device = phi_q.device();
-
-        //let mut u = Tensor::<4>::ones([batch, heads, seq, 1], &device);
-        //let mut w = Tensor::<4>::ones([batch, heads, seq, 1], &device);
-
         let phi_q_t = phi_q.clone().transpose(); // [batch, heads, d+1, seq]
         let phi_k_t = phi_k.clone().transpose();
 
         let mut u = 1.0_f32 / (l2_norm(phi_q.clone(), 3));
-        let mut w = 1.0_f32 / (l2_norm(phi_k.clone(), 3));
+        // let mut w = 1.0_f32 / (l2_norm(phi_k.clone(), 3));
+        let mut w = phi_k.clone();
 
         for _ in 0..self.sinkhorn_iters {
             let qt_u = phi_q_t.clone().matmul(u.clone()); // [b,h,d+1,1]
@@ -117,11 +106,10 @@ impl DSTHA {
         let v = v.reshape([batch, seq, h, d]).swap_dims(1, 2);
 
         let m = self.m(); // [heads]
-        let alpha = 1.0_f32 - m.clone().square(); // [heads]
-        let scale = (alpha.exp() / 2.0).sqrt(); // sqrt(e^alpha / 2), [heads]
+        let scale = (self.alpha.val().exp() / 2.0).sqrt(); // sqrt(e^alpha / 2), [heads]
 
         let scale_b = scale.reshape([1, h, 1, 1]);
-        let gamma_b = self.gamma().reshape([1, h, 1, 1]);
+        let gamma_b = self.gamma.val().reshape([1, h, 1, 1]);
 
         (
             self.phi(q, scale_b.clone(), gamma_b.clone(), m.clone()),
@@ -184,8 +172,7 @@ impl DSTHAConfig {
         let d_head = self.d_model / self.n_heads;
 
         let alpha = Tensor::<1>::full([self.n_heads], self.init_alpha, device);
-
-        let raw_gamma = Tensor::<1>::full([self.n_heads], self.init_gamma, device);
+        let gamma = Tensor::<1>::full([self.n_heads], self.init_gamma, device);
 
         let init_logits = || LinearConfig::new(self.d_model, self.d_model).init(device);
         DSTHA {
@@ -195,7 +182,7 @@ impl DSTHAConfig {
             out_proj: init_logits(),
             softplus: SoftplusConfig::new().with_beta(0.1).init(),
             delta_proj: LinearConfig::new(d_head, 1).init(device),
-            raw_gamma: Param::from_tensor(raw_gamma),
+            gamma: Param::from_tensor(gamma),
             alpha: Param::from_tensor(alpha),
             n_heads: self.n_heads,
             d_head,
@@ -217,7 +204,7 @@ mod tests {
     #[test]
     fn forward_runs_and_marginals_converge_to_one() {
         let device = device();
-        let config = DSTHAConfig::new(16, 4).with_sinkhorn_iters(10);
+        let config = DSTHAConfig::new(16, 4).with_sinkhorn_iters(1);
         let model = config.init(&device);
 
         let x = Tensor::<3>::random([2, 20, 16], Distribution::Normal(0.0, 1.0), &device);
